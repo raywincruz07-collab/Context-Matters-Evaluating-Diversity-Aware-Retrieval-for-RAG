@@ -38,15 +38,10 @@ This is the final Phase 1 (Sprint 1) baseline RAG system for medical question an
 - **F1 and ROUGE-L** are weak lexical indicators.
 - **Sprint 2** should add MMR, clustering, DPP, faithfulness, hallucination, coverage, and diversity metrics.
 
-## Setup & Reproduction
-
-Please refer to `SPRINT1_REPRODUCTION.md` for full details on how to install dependencies, run the pipeline, and verify the correct Original DPR models.
-
 ## Project Structure
 
 ```
 medical-rag-project/
-├── SPRINT1_REPRODUCTION.md   # Setup and reproduction instructions
 ├── requirements.txt          # Dependencies
 ├── src/
 │   ├── app.py                    # Streamlit UI
