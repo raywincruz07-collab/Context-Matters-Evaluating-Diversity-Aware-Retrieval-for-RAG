@@ -35,7 +35,7 @@ os.environ["MAKI_DEFAULT_CTX"] = "7680"
 To confirm that the Original DPR implementation (Facebook dual-encoder) is correctly configured, run:
 
 ```bash
-python -c "from retrievers.factory import get_retriever; r=get_retriever('dpr'); print(type(r))"
+python -c "import sys; sys.path.insert(0, 'src'); from retrievers.factory import get_retriever; r=get_retriever('dpr'); print(type(r))"
 ```
 
 **Expected output:**
@@ -50,7 +50,7 @@ python -c "from retrievers.factory import get_retriever; r=get_retriever('dpr');
 To ensure the pipeline is working end-to-end, run a quick smoke test with 5 questions:
 
 ```bash
-python eval_all_retrievers_safe.py \
+python src/eval_all_retrievers_safe.py \
   --top_k 5 \
   --retrievers bm25 dpr contriever colbertv2 \
   --with-generation \
@@ -63,7 +63,7 @@ python eval_all_retrievers_safe.py \
 Run the full 1,000-question evaluation across all retrievers:
 
 ```bash
-python eval_all_retrievers_safe.py --with-generation --results_dir results/raw
+python src/eval_all_retrievers_safe.py --with-generation --results_dir results/raw
 ```
 
 ## 6. Resuming After Disconnect (Colab)
@@ -72,7 +72,7 @@ The `eval_all_retrievers_safe.py` script automatically saves intermediate result
 If your Colab session disconnects or the script fails, simply re-run the exact same command:
 
 ```bash
-python eval_all_retrievers_safe.py --with-generation --results_dir results/raw
+python src/eval_all_retrievers_safe.py --with-generation --results_dir results/raw
 ```
 
 The script will read the existing CSVs in `results/raw/`, skip completed questions, and resume from where it left off.

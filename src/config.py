@@ -5,7 +5,7 @@ Configuration for Medical RAG Pipeline
 import os
 
 # Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 INDEX_DIR = os.path.join(DATA_DIR, "indices")
 EMBEDDINGS_DIR = os.path.join(DATA_DIR, "embeddings")

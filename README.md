@@ -47,22 +47,23 @@ Please refer to `SPRINT1_REPRODUCTION.md` for full details on how to install dep
 ```
 medical-rag-project/
 ├── SPRINT1_REPRODUCTION.md   # Setup and reproduction instructions
-├── app.py                    # Streamlit UI
-├── config.py                 # Configuration
-├── data_prep.py              # PubMedQA download & processing
-├── pipeline.py               # RAG pipeline (retriever + generator + eval)
-├── generator.py              # Generator config (using Maki API)
-├── eval_all_retrievers_safe.py # Safe resumable evaluation script
 ├── requirements.txt          # Dependencies
-├── retrievers/
-│   ├── __init__.py           # BaseRetriever abstract class
-│   ├── factory.py            # Retriever factory
-│   ├── bm25_retriever.py     # BM25 (sparse)
-│   ├── dpr_original_retriever.py # Original Facebook DPR
-│   ├── dense_retriever.py    # Contriever (dense + FAISS)
-│   └── colbert_retriever.py  # ColBERTv2 (late interaction)
-├── evaluation/
-│   └── __init__.py           # Metrics (EM, F1, ROUGE-L, Recall@K, MRR)
+├── src/
+│   ├── app.py                    # Streamlit UI
+│   ├── config.py                 # Configuration
+│   ├── data_prep.py              # PubMedQA download & processing
+│   ├── pipeline.py               # RAG pipeline (retriever + generator + eval)
+│   ├── generator.py              # Generator config (using Maki API)
+│   ├── eval_all_retrievers_safe.py # Safe resumable evaluation script
+│   ├── retrievers/
+│   │   ├── __init__.py           # BaseRetriever abstract class
+│   │   ├── factory.py            # Retriever factory
+│   │   ├── bm25_retriever.py     # BM25 (sparse)
+│   │   ├── dpr_original_retriever.py # Original Facebook DPR
+│   │   ├── dense_retriever.py    # Contriever (dense + FAISS)
+│   │   └── colbert_retriever.py  # ColBERTv2 (late interaction)
+│   └── evaluation/
+│       └── __init__.py           # Metrics (EM, F1, ROUGE-L, Recall@K, MRR)
 ├── data/
 │   ├── corpus.json           # (generated) retrieval corpus
 │   ├── qa_pairs.json         # (generated) QA evaluation pairs
