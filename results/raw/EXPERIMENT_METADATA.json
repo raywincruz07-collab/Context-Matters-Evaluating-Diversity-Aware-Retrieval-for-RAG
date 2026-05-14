@@ -1,0 +1,19 @@
+{
+    "retrievers": [
+        "bm25",
+        "dpr",
+        "contriever",
+        "colbertv2"
+    ],
+    "top_k": 5,
+    "limit": null,
+    "with_generation": true,
+    "generator_config": {
+        "llm_provider": "Mannheim Maki OpenAI-compatible API",
+        "llm_model": "ministral-3-14b",
+        "llm_host": "https://maki.uni-mannheim.de/v1",
+        "temperature": 0.0,
+        "max_tokens": 512,
+        "top_k": 5
+    }
+}
