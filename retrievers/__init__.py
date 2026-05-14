@@ -3,7 +3,7 @@ Abstract base class for all retrievers.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
 
 class BaseRetriever(ABC):
@@ -29,6 +29,8 @@ class BaseRetriever(ABC):
         """
         pass
 
-    def batch_retrieve(self, queries: List[str], top_k: int = 5) -> List[List[Tuple[Dict, float]]]:
+    def batch_retrieve(
+        self, queries: List[str], top_k: int = 5
+    ) -> List[List[Tuple[Dict, float]]]:
         """Retrieve for multiple queries."""
         return [self.retrieve(q, top_k) for q in queries]

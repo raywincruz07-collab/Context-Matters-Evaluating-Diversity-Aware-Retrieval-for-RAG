@@ -18,7 +18,8 @@ from typing import Dict, Iterator, List, Optional
 
 import requests
 
-from config import MAKI_API_KEY, MAKI_HOST, MAKI_MODEL, MAKI_DEFAULT_CTX, PROMPT_TEMPLATE
+from config import (MAKI_API_KEY, MAKI_DEFAULT_CTX, MAKI_HOST, MAKI_MODEL,
+                    PROMPT_TEMPLATE)
 
 
 class MakiGenerator:
@@ -71,7 +72,9 @@ class MakiGenerator:
                 section = doc.get("section")
                 pubid = doc.get("pubid") or doc.get("pmid")
                 if section or pubid:
-                    meta = f" ({section or 'section'}; PMID/PubMed: {pubid or 'unknown'})"
+                    meta = (
+                        f" ({section or 'section'}; PMID/PubMed: {pubid or 'unknown'})"
+                    )
             context_parts.append(f"[Document {i}{meta}]:\n{text}")
         context = "\n\n".join(context_parts)
         return PROMPT_TEMPLATE.format(context=context, question=query)
@@ -117,7 +120,9 @@ class MakiGenerator:
         if not self.is_available():
             return "Error: MAKI_API_KEY not set. Enter it in the sidebar or set $env:MAKI_API_KEY."
 
-        payload = self._payload(query, context_docs, temperature, max_tokens, stream=False)
+        payload = self._payload(
+            query, context_docs, temperature, max_tokens, stream=False
+        )
 
         last_error: Optional[str] = None
         for attempt in range(1, max_retries + 1):
@@ -158,7 +163,9 @@ class MakiGenerator:
             yield "Error: MAKI_API_KEY not set. Enter it in the sidebar or set $env:MAKI_API_KEY."
             return
 
-        payload = self._payload(query, context_docs, temperature, max_tokens, stream=True)
+        payload = self._payload(
+            query, context_docs, temperature, max_tokens, stream=True
+        )
 
         try:
             with requests.post(
@@ -173,7 +180,7 @@ class MakiGenerator:
                     if not line:
                         continue
                     if line.startswith("data: "):
-                        line = line[len("data: "):]
+                        line = line[len("data: ") :]
                     if line.strip() == "[DONE]":
                         break
                     try:
@@ -185,7 +192,9 @@ class MakiGenerator:
                         continue
         except Exception:
             # Some LiteLLM endpoints do not support streaming. Do not crash the UI.
-            yield self.generate(query, context_docs, temperature=temperature, max_tokens=max_tokens)
+            yield self.generate(
+                query, context_docs, temperature=temperature, max_tokens=max_tokens
+            )
 
 
 # Backward-compatible alias so old imports still work.

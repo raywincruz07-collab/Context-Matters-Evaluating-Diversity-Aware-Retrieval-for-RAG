@@ -3,21 +3,23 @@ Streamlit UI for Medical RAG Pipeline.
 Run with: streamlit run app.py
 """
 
-import streamlit as st
-import time
 import json
 import os
 import sys
+import time
+
+import streamlit as st
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import RETRIEVER_CHOICES, TOP_K, MAKI_MODEL, MAKI_HOST, MAKI_API_KEY
-from data_prep import prepare_data, load_data
-from retrievers.factory import get_retriever
-from generator import MakiGenerator
+from config import (MAKI_API_KEY, MAKI_HOST, MAKI_MODEL, RETRIEVER_CHOICES,
+                    TOP_K)
+from data_prep import load_data, prepare_data
 from evaluation import evaluate_single
+from generator import MakiGenerator
 from pubmed_fetch import fetch_for_query
+from retrievers.factory import get_retriever
 
 # ─── Page Config ───
 st.set_page_config(
@@ -27,7 +29,8 @@ st.set_page_config(
 )
 
 # ─── Custom CSS ───
-st.markdown("""
+st.markdown(
+    """
 <style>
     .main-header {
         font-size: 2.2rem;
@@ -74,7 +77,9 @@ st.markdown("""
     .status-ok { color: #27ae60; }
     .status-err { color: #e74c3c; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ─── Session State Init ───
@@ -91,6 +96,7 @@ def init_state():
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
+
 
 init_state()
 
@@ -115,7 +121,9 @@ with st.sidebar:
             st.session_state.data_loaded = True
 
     if st.session_state.data_loaded:
-        st.success(f"✓ {len(st.session_state.corpus)} docs | {len(st.session_state.qa_pairs)} QA pairs")
+        st.success(
+            f"✓ {len(st.session_state.corpus)} docs | {len(st.session_state.qa_pairs)} QA pairs"
+        )
     else:
         st.info("Click above to load dataset")
 
@@ -126,7 +134,7 @@ with st.sidebar:
     selected_retriever = st.selectbox(
         "Choose retriever",
         RETRIEVER_CHOICES,
-        help="BM25 is fastest. Dense models need embedding computation on first run."
+        help="BM25 is fastest. Dense models need embedding computation on first run.",
     )
 
     if st.session_state.data_loaded:
@@ -145,23 +153,41 @@ with st.sidebar:
 
     # Generator status
     st.markdown("### 🤖 Generator")
-    maki_key = st.text_input("University GPU API Key", type="password", placeholder="sk_...",
-                             help="Use the API key for https://maki.uni-mannheim.de/v1")
+    maki_key = st.text_input(
+        "University GPU API Key",
+        type="password",
+        placeholder="sk_...",
+        help="Use the API key for https://maki.uni-mannheim.de/v1",
+    )
     if maki_key:
-        import os; os.environ["MAKI_API_KEY"] = maki_key
+        import os
+
+        os.environ["MAKI_API_KEY"] = maki_key
     api_key = maki_key or MAKI_API_KEY
 
-    maki_host = st.text_input("API Host", value=MAKI_HOST, help="OpenAI-compatible /v1 endpoint")
+    maki_host = st.text_input(
+        "API Host", value=MAKI_HOST, help="OpenAI-compatible /v1 endpoint"
+    )
     generator = MakiGenerator(api_key=api_key, host=maki_host)
-    maki_model = st.selectbox("Model", [
-        "ministral-3-14b",
-        "magistral:24b_6k",
-    ], index=0, help="Use the model name provided by the university endpoint")
+    maki_model = st.selectbox(
+        "Model",
+        [
+            "ministral-3-14b",
+            "magistral:24b_6k",
+        ],
+        index=0,
+        help="Use the model name provided by the university endpoint",
+    )
     generator.model = maki_model
     if api_key:
-        st.markdown(f'<span class="status-ok">✓ University GPU API ready ({maki_model})</span>', unsafe_allow_html=True)
+        st.markdown(
+            f'<span class="status-ok">✓ University GPU API ready ({maki_model})</span>',
+            unsafe_allow_html=True,
+        )
     else:
-        st.markdown('<span class="status-err">✗ No API key set</span>', unsafe_allow_html=True)
+        st.markdown(
+            '<span class="status-err">✗ No API key set</span>', unsafe_allow_html=True
+        )
         st.caption('Enter key above or set: $env:MAKI_API_KEY = "your_key"')
     st.session_state.generator = generator
 
@@ -175,10 +201,15 @@ with st.sidebar:
 
 # ─── Main Content ───
 st.markdown('<div class="main-header">🏥 MedRAG</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Medical Retrieval-Augmented Generation — Diversity-Aware Retrieval Evaluation</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-header">Medical Retrieval-Augmented Generation — Diversity-Aware Retrieval Evaluation</div>',
+    unsafe_allow_html=True,
+)
 
 # ─── Tabs ───
-tab_query, tab_eval, tab_explore = st.tabs(["💬 Query", "📈 Evaluate", "📚 Explore Data"])
+tab_query, tab_eval, tab_explore = st.tabs(
+    ["💬 Query", "📈 Evaluate", "📚 Explore Data"]
+)
 
 # ─── Query Tab ───
 with tab_query:
@@ -190,33 +221,50 @@ with tab_query:
         # Sample questions from PubMedQA
         sample_questions = ["Type your own question..."]
         if st.session_state.qa_pairs:
-            sample_questions += [qa["question"] for qa in st.session_state.qa_pairs[:20]]
+            sample_questions += [
+                qa["question"] for qa in st.session_state.qa_pairs[:20]
+            ]
 
         selected_q = st.selectbox("Sample questions from PubMedQA", sample_questions)
 
         if selected_q == "Type your own question...":
-            query = st.text_area("Your question:", height=100, placeholder="e.g., Does aspirin reduce heart attack risk?")
+            query = st.text_area(
+                "Your question:",
+                height=100,
+                placeholder="e.g., Does aspirin reduce heart attack risk?",
+            )
             matching_qa = None
             is_custom = True
         else:
             query = st.text_area("Your question:", value=selected_q, height=100)
-            matching_qa = next((qa for qa in (st.session_state.qa_pairs or []) if qa["question"] == selected_q), None)
+            matching_qa = next(
+                (
+                    qa
+                    for qa in (st.session_state.qa_pairs or [])
+                    if qa["question"] == selected_q
+                ),
+                None,
+            )
             is_custom = False
 
         # Mode selector
         if is_custom:
-            st.info("💡 Custom question detected — will fetch live PubMed abstracts as context.")
+            st.info(
+                "💡 Custom question detected — will fetch live PubMed abstracts as context."
+            )
             use_gold_docs = False
         else:
             use_gold_docs = st.checkbox(
                 "Use gold documents (debug mode)",
                 value=False,
-                help="Bypasses the retriever and feeds the ground-truth documents directly to the LLM."
+                help="Bypasses the retriever and feeds the ground-truth documents directly to the LLM.",
             )
 
         can_run = bool(query.strip()) and st.session_state.generator is not None
 
-        run_clicked = st.button("🔍 Run RAG Pipeline", disabled=not can_run, use_container_width=True)
+        run_clicked = st.button(
+            "🔍 Run RAG Pipeline", disabled=not can_run, use_container_width=True
+        )
 
         if not query.strip():
             st.warning("Enter a question to continue")
@@ -236,10 +284,14 @@ with tab_query:
                 retrieved = [(doc, 1.0) for doc in context_docs]
                 ret_time = 0.0
                 all_fetched = []
-                st.info(f"Debug mode: using {len(context_docs)} gold documents directly")
+                st.info(
+                    f"Debug mode: using {len(context_docs)} gold documents directly"
+                )
 
             elif is_custom:
-                with st.spinner("Searching PubMed for relevant abstracts... (this takes ~5s)"):
+                with st.spinner(
+                    "Searching PubMed for relevant abstracts... (this takes ~5s)"
+                ):
                     t0 = time.time()
                     live_docs = fetch_for_query(query, max_results=15)
                     ret_time = time.time() - t0
@@ -254,22 +306,35 @@ with tab_query:
 
                 # BM25 over the live docs to rank them
                 from rank_bm25 import BM25Okapi
+
                 texts = [d["text"] for d in live_docs]
                 tokenized = [t.lower().split() for t in texts]
                 bm25_live = BM25Okapi(tokenized)
                 scores = bm25_live.get_scores(query.lower().split())
                 top_indices = scores.argsort()[-top_k:][::-1]
-                retrieved = [(live_docs[i], float(scores[i])) for i in top_indices if scores[i] > 0]
+                retrieved = [
+                    (live_docs[i], float(scores[i]))
+                    for i in top_indices
+                    if scores[i] > 0
+                ]
                 if not retrieved:
-                    retrieved = [(live_docs[i], 1.0) for i in range(min(top_k, len(live_docs)))]
+                    retrieved = [
+                        (live_docs[i], 1.0) for i in range(min(top_k, len(live_docs)))
+                    ]
 
-                st.success(f"✓ Fetched {len(live_docs)} sections from PubMed, showing top {len(retrieved)}")
+                st.success(
+                    f"✓ Fetched {len(live_docs)} sections from PubMed, showing top {len(retrieved)}"
+                )
                 all_fetched = live_docs
 
             else:
                 with st.spinner("Retrieving documents from static corpus..."):
                     t0 = time.time()
-                    retrieved = st.session_state.retriever.retrieve(query, top_k=top_k) if st.session_state.retriever_ready else []
+                    retrieved = (
+                        st.session_state.retriever.retrieve(query, top_k=top_k)
+                        if st.session_state.retriever_ready
+                        else []
+                    )
                     ret_time = time.time() - t0
                 all_fetched = []
 
@@ -279,21 +344,32 @@ with tab_query:
                     retrieved_ids = set(doc["doc_id"] for doc, _ in retrieved)
                     overlap = len(gold_ids & retrieved_ids)
                     if overlap == 0:
-                        st.warning(f"⚠️ None of the gold documents retrieved. Try increasing Top-K or enable debug mode.")
+                        st.warning(
+                            f"⚠️ None of the gold documents retrieved. Try increasing Top-K or enable debug mode."
+                        )
                     else:
-                        st.success(f"✓ {overlap}/{len(gold_ids)} gold documents retrieved")
+                        st.success(
+                            f"✓ {overlap}/{len(gold_ids)} gold documents retrieved"
+                        )
 
             src_label = "live PubMed" if is_custom else "static corpus"
-            st.markdown(f"### Retrieved Documents ({len(retrieved)} docs from {src_label}, {ret_time:.2f}s)")
+            st.markdown(
+                f"### Retrieved Documents ({len(retrieved)} docs from {src_label}, {ret_time:.2f}s)"
+            )
             for i, (doc, score) in enumerate(retrieved, 1):
                 is_gold = matching_qa and doc["doc_id"] in matching_qa["gold_doc_ids"]
-                label = f"Doc {i} — Score: {score:.4f} | PubMed: {doc.get('pubid', 'N/A')}"
+                label = (
+                    f"Doc {i} — Score: {score:.4f} | PubMed: {doc.get('pubid', 'N/A')}"
+                )
                 if is_gold:
                     label += " ✓ gold"
                 with st.expander(label, expanded=(i <= 2)):
                     if doc.get("title"):
                         st.markdown(f"**{doc['title']}**")
-                    st.markdown(f'<div class="doc-meta">Section: {doc.get("section_label", "N/A")} | Source: {doc.get("source", "static")}</div>', unsafe_allow_html=True)
+                    st.markdown(
+                        f'<div class="doc-meta">Section: {doc.get("section_label", "N/A")} | Source: {doc.get("source", "static")}</div>',
+                        unsafe_allow_html=True,
+                    )
                     st.write(doc["text"])
 
             st.markdown("---")
@@ -308,7 +384,9 @@ with tab_query:
                 t0 = time.time()
                 answer_placeholder = st.empty()
                 full_answer = ""
-                for token in generator.generate_streaming(query, context_docs, temperature=temperature):
+                for token in generator.generate_streaming(
+                    query, context_docs, temperature=temperature
+                ):
                     full_answer += token
                     answer_placeholder.markdown(full_answer)
                 gen_time = time.time() - t0
@@ -335,7 +413,10 @@ with tab_query:
                         col.metric(name.replace("_", " ").title(), f"{val:.3f}")
             else:
                 st.error("Groq API key not set. Enter it in the sidebar.")
-                st.code("export GROQ_API_KEY=your_key_here\n# Get free key at https://console.groq.com", language="bash")
+                st.code(
+                    "export GROQ_API_KEY=your_key_here\n# Get free key at https://console.groq.com",
+                    language="bash",
+                )
 
 
 # ─── Evaluate Tab ───
@@ -351,7 +432,9 @@ with tab_eval:
         eval_col1, eval_col2 = st.columns([1, 2])
 
         with eval_col1:
-            num_samples = st.number_input("Number of samples", 1, len(st.session_state.qa_pairs), 10)
+            num_samples = st.number_input(
+                "Number of samples", 1, len(st.session_state.qa_pairs), 10
+            )
             eval_top_k = st.number_input("Top-K for eval", 1, 20, top_k)
 
             if st.button("▶️ Run Evaluation", use_container_width=True):
@@ -365,11 +448,15 @@ with tab_eval:
                     results = []
 
                     for i, qa in enumerate(st.session_state.qa_pairs[:num_samples]):
-                        progress.progress((i + 1) / num_samples, f"Evaluating {i+1}/{num_samples}...")
+                        progress.progress(
+                            (i + 1) / num_samples, f"Evaluating {i+1}/{num_samples}..."
+                        )
 
                         retrieved = retriever.retrieve(qa["question"], top_k=eval_top_k)
                         context_docs = [doc for doc, _ in retrieved]
-                        answer = generator.generate(qa["question"], context_docs, temperature=temperature)
+                        answer = generator.generate(
+                            qa["question"], context_docs, temperature=temperature
+                        )
 
                         metrics = evaluate_single(
                             prediction=answer,
@@ -377,10 +464,12 @@ with tab_eval:
                             retrieved_doc_ids=[d["doc_id"] for d, _ in retrieved],
                             gold_doc_ids=qa["gold_doc_ids"],
                         )
-                        results.append({
-                            "question": qa["question"][:80] + "...",
-                            **metrics,
-                        })
+                        results.append(
+                            {
+                                "question": qa["question"][:80] + "...",
+                                **metrics,
+                            }
+                        )
 
                     progress.empty()
                     st.session_state["eval_results"] = results
@@ -395,17 +484,20 @@ with tab_eval:
                 # Averages
                 st.markdown("#### Aggregated Metrics")
                 avg_cols = st.columns(5)
-                for col, metric in zip(avg_cols, ["exact_match", "f1", "rouge_l", "recall_at_k", "mrr"]):
+                for col, metric in zip(
+                    avg_cols, ["exact_match", "f1", "rouge_l", "recall_at_k", "mrr"]
+                ):
                     if metric in df.columns:
                         col.metric(
-                            metric.replace("_", " ").title(),
-                            f"{df[metric].mean():.3f}"
+                            metric.replace("_", " ").title(), f"{df[metric].mean():.3f}"
                         )
 
                 # Per-example table
                 st.markdown("#### Per-Example Results")
                 st.dataframe(
-                    df.style.format({c: "{:.3f}" for c in df.columns if c != "question"}),
+                    df.style.format(
+                        {c: "{:.3f}" for c in df.columns if c != "question"}
+                    ),
                     use_container_width=True,
                 )
 
@@ -429,7 +521,9 @@ with tab_explore:
         import pandas as pd
 
         qa_df = pd.DataFrame(st.session_state.qa_pairs)
-        st.markdown(f"**Total QA pairs:** {len(qa_df)} | **Total documents:** {len(st.session_state.corpus)}")
+        st.markdown(
+            f"**Total QA pairs:** {len(qa_df)} | **Total documents:** {len(st.session_state.corpus)}"
+        )
 
         # Decision distribution
         if "final_decision" in qa_df.columns:

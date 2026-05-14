@@ -10,10 +10,10 @@ use a smaller corpus subset or precomputed index.
 """
 
 import os
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
-from retrievers import BaseRetriever
 from config import COLBERT_INDEX_NAME
+from retrievers import BaseRetriever
 
 
 class ColBERTRetriever(BaseRetriever):
@@ -21,10 +21,7 @@ class ColBERTRetriever(BaseRetriever):
         super().__init__("colbertv2")
         self.rag = None
         self.index_path = os.path.join(
-            ".ragatouille",
-            "colbert",
-            "indexes",
-            COLBERT_INDEX_NAME
+            ".ragatouille", "colbert", "indexes", COLBERT_INDEX_NAME
         )
 
     def _patch_transformers_for_colbert(self):
@@ -36,7 +33,9 @@ class ColBERTRetriever(BaseRetriever):
                     self.all_tied_weights_keys = {}
                 return None
 
-            PreTrainedModel.mark_tied_weights_as_initialized = safe_mark_tied_weights_as_initialized
+            PreTrainedModel.mark_tied_weights_as_initialized = (
+                safe_mark_tied_weights_as_initialized
+            )
             print("Applied Transformers compatibility patch for ColBERTv2.")
 
         except Exception as e:
@@ -50,9 +49,11 @@ class ColBERTRetriever(BaseRetriever):
         try:
             self._patch_transformers_for_colbert()
             import sys
-            if os.name == 'nt' and 'pwd' not in sys.modules:
+
+            if os.name == "nt" and "pwd" not in sys.modules:
                 import types
-                sys.modules['pwd'] = types.ModuleType('pwd')
+
+                sys.modules["pwd"] = types.ModuleType("pwd")
             from ragatouille import RAGPretrainedModel
 
             if os.path.exists(self.index_path):
@@ -78,6 +79,7 @@ class ColBERTRetriever(BaseRetriever):
 
         except ImportError as ie:
             import traceback
+
             traceback.print_exc()
             print(f"ImportError details: {ie}")
             print("RAGatouille not installed. Install with: pip install ragatouille")
@@ -91,7 +93,9 @@ class ColBERTRetriever(BaseRetriever):
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Dict, float]]:
         """Retrieve using ColBERTv2 late interaction."""
         if not self.is_indexed or self.rag is None:
-            raise RuntimeError("ColBERTv2 index not available. Call index() first or check errors above.")
+            raise RuntimeError(
+                "ColBERTv2 index not available. Call index() first or check errors above."
+            )
 
         results = self.rag.search(query=query, k=top_k)
 

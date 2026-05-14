@@ -9,33 +9,35 @@ Similarity: dot product (NOT cosine). Do NOT normalize embeddings.
 FAISS: IndexFlatIP (inner product = dot product on raw vectors).
 """
 
-import os
 import gc
-import numpy as np
+import os
+from typing import Dict, List, Tuple
+
 import faiss
+import numpy as np
 import torch
 from tqdm import tqdm
-from typing import List, Dict, Tuple
+from transformers import AutoTokenizer, DPRContextEncoder, DPRQuestionEncoder
 
-from transformers import AutoTokenizer, DPRQuestionEncoder, DPRContextEncoder
-
+from config import DPR_CTX_MODEL, DPR_QUERY_MODEL, EMBEDDINGS_DIR, INDEX_DIR
 from retrievers import BaseRetriever
-from config import EMBEDDINGS_DIR, INDEX_DIR, DPR_QUERY_MODEL, DPR_CTX_MODEL
 
 
 class OriginalDPRRetriever(BaseRetriever):
     def __init__(self):
         super().__init__("dpr")
-        self.query_model_name = DPR_QUERY_MODEL   # facebook/dpr-question_encoder-single-nq-base
-        self.ctx_model_name   = DPR_CTX_MODEL     # facebook/dpr-ctx_encoder-single-nq-base
+        self.query_model_name = (
+            DPR_QUERY_MODEL  # facebook/dpr-question_encoder-single-nq-base
+        )
+        self.ctx_model_name = DPR_CTX_MODEL  # facebook/dpr-ctx_encoder-single-nq-base
 
-        self.q_tokenizer  = None
+        self.q_tokenizer = None
         self.ctx_tokenizer = None
-        self.q_encoder    = None
-        self.ctx_encoder  = None
+        self.q_encoder = None
+        self.ctx_encoder = None
 
-        self.faiss_index   = None
-        self.embedding_dim = 768                   # BERT-base hidden size
+        self.faiss_index = None
+        self.embedding_dim = 768  # BERT-base hidden size
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # ------------------------------------------------------------------
@@ -53,11 +55,15 @@ class OriginalDPRRetriever(BaseRetriever):
         print(f"  Device           : {self.device}")
         print("=" * 70)
 
-        self.q_tokenizer   = AutoTokenizer.from_pretrained(self.query_model_name)
+        self.q_tokenizer = AutoTokenizer.from_pretrained(self.query_model_name)
         self.ctx_tokenizer = AutoTokenizer.from_pretrained(self.ctx_model_name)
 
-        self.q_encoder  = DPRQuestionEncoder.from_pretrained(self.query_model_name).to(self.device)
-        self.ctx_encoder = DPRContextEncoder.from_pretrained(self.ctx_model_name).to(self.device)
+        self.q_encoder = DPRQuestionEncoder.from_pretrained(self.query_model_name).to(
+            self.device
+        )
+        self.ctx_encoder = DPRContextEncoder.from_pretrained(self.ctx_model_name).to(
+            self.device
+        )
 
         self.q_encoder.eval()
         self.ctx_encoder.eval()
@@ -66,7 +72,9 @@ class OriginalDPRRetriever(BaseRetriever):
     # Encoding
     # ------------------------------------------------------------------
 
-    def _encode_questions(self, questions: List[str], batch_size: int = 16) -> np.ndarray:
+    def _encode_questions(
+        self, questions: List[str], batch_size: int = 16
+    ) -> np.ndarray:
         self._load_models()
         all_emb = []
 
@@ -82,7 +90,7 @@ class OriginalDPRRetriever(BaseRetriever):
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             with torch.no_grad():
-                emb = self.q_encoder(**inputs).pooler_output   # (B, 768)
+                emb = self.q_encoder(**inputs).pooler_output  # (B, 768)
 
             all_emb.append(emb.cpu().numpy().astype("float32"))
 
@@ -92,12 +100,14 @@ class OriginalDPRRetriever(BaseRetriever):
         self._load_models()
         all_emb = []
 
-        texts  = [str(doc.get("text",  "")) for doc in corpus]
-        titles = [""] * len(texts)            # PubMedQA has no separate titles
+        texts = [str(doc.get("text", "")) for doc in corpus]
+        titles = [""] * len(texts)  # PubMedQA has no separate titles
 
-        for start in tqdm(range(0, len(texts), batch_size), desc="Encoding DPR contexts"):
+        for start in tqdm(
+            range(0, len(texts), batch_size), desc="Encoding DPR contexts"
+        ):
             batch_titles = titles[start : start + batch_size]
-            batch_texts  = texts[start  : start + batch_size]
+            batch_texts = texts[start : start + batch_size]
 
             # DPR context encoder takes (title, text) as a token-type-separated pair
             inputs = self.ctx_tokenizer(
@@ -125,10 +135,10 @@ class OriginalDPRRetriever(BaseRetriever):
         self.corpus = corpus
 
         emb_path = os.path.join(EMBEDDINGS_DIR, "dpr_embeddings.npy")
-        idx_path  = os.path.join(INDEX_DIR,      "dpr_faiss.index")
+        idx_path = os.path.join(INDEX_DIR, "dpr_faiss.index")
 
         os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
-        os.makedirs(INDEX_DIR,      exist_ok=True)
+        os.makedirs(INDEX_DIR, exist_ok=True)
 
         embeddings = None
 
@@ -189,10 +199,10 @@ class OriginalDPRRetriever(BaseRetriever):
     # ------------------------------------------------------------------
 
     def unload_model(self):
-        self.q_tokenizer   = None
+        self.q_tokenizer = None
         self.ctx_tokenizer = None
-        self.q_encoder     = None
-        self.ctx_encoder   = None
+        self.q_encoder = None
+        self.ctx_encoder = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

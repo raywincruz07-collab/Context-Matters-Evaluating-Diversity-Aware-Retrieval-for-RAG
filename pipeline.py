@@ -5,13 +5,13 @@ RAG Pipeline: ties together retriever, generator, and evaluation.
 import json
 import os
 import time
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from config import TOP_K, DATA_DIR
+from config import DATA_DIR, TOP_K
 from data_prep import load_data, prepare_data
-from retrievers.factory import get_retriever
+from evaluation import evaluate_batch, evaluate_single
 from generator import MakiGenerator
-from evaluation import evaluate_single, evaluate_batch
+from retrievers.factory import get_retriever
 
 
 class RAGPipeline:
@@ -41,7 +41,9 @@ class RAGPipeline:
             print(f"\nUniversity GPU generator ready (model: {self.generator.model})")
         else:
             available = self.generator.list_models()
-            print(f"\nWarning: University GPU model '{self.generator.model}' not found.")
+            print(
+                f"\nWarning: University GPU model '{self.generator.model}' not found."
+            )
             if available:
                 print(f"Available models: {available}")
             else:
@@ -79,7 +81,9 @@ class RAGPipeline:
             "generation_time": generation_time,
         }
 
-    def evaluate(self, num_samples: Optional[int] = None, top_k: Optional[int] = None) -> Dict:
+    def evaluate(
+        self, num_samples: Optional[int] = None, top_k: Optional[int] = None
+    ) -> Dict:
         """
         Run evaluation on QA pairs.
 
@@ -113,15 +117,17 @@ class RAGPipeline:
                 gold_doc_ids=qa["gold_doc_ids"],
             )
 
-            all_results.append({
-                "qa_id": qa["qa_id"],
-                "question": qa["question"],
-                "prediction": answer,
-                "ground_truth": qa["long_answer"],
-                "retrieved_doc_ids": retrieved_doc_ids,
-                "gold_doc_ids": qa["gold_doc_ids"],
-                **metrics,
-            })
+            all_results.append(
+                {
+                    "qa_id": qa["qa_id"],
+                    "question": qa["question"],
+                    "prediction": answer,
+                    "ground_truth": qa["long_answer"],
+                    "retrieved_doc_ids": retrieved_doc_ids,
+                    "gold_doc_ids": qa["gold_doc_ids"],
+                    **metrics,
+                }
+            )
 
         print()  # newline after progress
 

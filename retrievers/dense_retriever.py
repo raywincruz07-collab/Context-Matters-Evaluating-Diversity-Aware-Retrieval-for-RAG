@@ -10,16 +10,16 @@ Important:
 """
 
 import os
-import numpy as np
-import faiss
 import pickle
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
+import faiss
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
-from retrievers import BaseRetriever
 from config import EMBEDDINGS_DIR, INDEX_DIR
+from retrievers import BaseRetriever
 
 
 class DenseRetriever(BaseRetriever):
@@ -38,7 +38,9 @@ class DenseRetriever(BaseRetriever):
             self.model = SentenceTransformer(self.model_name)
             self.embedding_dim = self.model.get_sentence_embedding_dimension()
 
-    def _encode(self, texts: List[str], batch_size: int = 32, show_progress: bool = True) -> np.ndarray:
+    def _encode(
+        self, texts: List[str], batch_size: int = 32, show_progress: bool = True
+    ) -> np.ndarray:
         """Encode texts to embeddings."""
         self._load_model()
         embeddings = self.model.encode(
@@ -74,7 +76,9 @@ class DenseRetriever(BaseRetriever):
             self.faiss_index = faiss.read_index(idx_path)
         else:
             print(f"Building {self.name} FAISS index...")
-            self.faiss_index = faiss.IndexFlatIP(self.embedding_dim)  # Inner product (cosine since normalized)
+            self.faiss_index = faiss.IndexFlatIP(
+                self.embedding_dim
+            )  # Inner product (cosine since normalized)
             self.faiss_index.add(embeddings)
             faiss.write_index(self.faiss_index, idx_path)
             print(f"Saved FAISS index to {idx_path}")
@@ -100,6 +104,7 @@ class DenseRetriever(BaseRetriever):
         """Free the embedding model from memory."""
         self.model = None
         import gc
+
         gc.collect()
 
 
@@ -117,19 +122,17 @@ class ContrieverRetriever(DenseRetriever):
     If the model cannot load, the retriever fails loudly instead of falling back to another model.
     This preserves experimental integrity.
     """
+
     def __init__(self):
-        super().__init__(
-            name="contriever",
-            model_name="facebook/contriever"
-        )
+        super().__init__(name="contriever", model_name="facebook/contriever")
 
     def _load_model(self):
         """Load Contriever with fallback."""
         if self.model is None:
             try:
                 print(f"Loading Contriever model...")
-                from transformers import AutoTokenizer, AutoModel
                 import torch
+                from transformers import AutoModel, AutoTokenizer
 
                 self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
                 self.base_model = AutoModel.from_pretrained(self.model_name)
@@ -144,27 +147,41 @@ class ContrieverRetriever(DenseRetriever):
                     def get_sentence_embedding_dimension(self):
                         return 768
 
-                    def encode(self, texts, batch_size=32, show_progress_bar=True, normalize_embeddings=True):
+                    def encode(
+                        self,
+                        texts,
+                        batch_size=32,
+                        show_progress_bar=True,
+                        normalize_embeddings=True,
+                    ):
                         all_embeddings = []
                         iterator = range(0, len(texts), batch_size)
                         if show_progress_bar:
                             from tqdm import tqdm
+
                             iterator = tqdm(iterator, desc="Encoding")
 
                         for i in iterator:
-                            batch = texts[i:i + batch_size]
+                            batch = texts[i : i + batch_size]
                             inputs = self.tokenizer(
-                                batch, padding=True, truncation=True,
-                                max_length=512, return_tensors="pt"
+                                batch,
+                                padding=True,
+                                truncation=True,
+                                max_length=512,
+                                return_tensors="pt",
                             )
                             with torch.no_grad():
                                 outputs = self.model(**inputs)
                             # Mean pooling
                             mask = inputs["attention_mask"].unsqueeze(-1).float()
-                            embeddings = (outputs.last_hidden_state * mask).sum(1) / mask.sum(1)
+                            embeddings = (outputs.last_hidden_state * mask).sum(
+                                1
+                            ) / mask.sum(1)
 
                             if normalize_embeddings:
-                                embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+                                embeddings = torch.nn.functional.normalize(
+                                    embeddings, p=2, dim=1
+                                )
 
                             all_embeddings.append(embeddings.numpy())
 

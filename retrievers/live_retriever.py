@@ -5,7 +5,8 @@ then runs BM25 over the fetched documents.
 Used for custom user questions where the static corpus has no coverage.
 """
 
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
+
 from rank_bm25 import BM25Okapi
 
 from pubmed_fetcher import fetch_docs_for_query
@@ -26,7 +27,9 @@ class LivePubMedRetriever:
         self.name = "live_pubmed"
         self.fetch_n = fetch_n  # how many papers to pull from PubMed
 
-    def retrieve(self, query: str, top_k: int = 5) -> Tuple[List[Tuple[Dict, float]], List[Dict]]:
+    def retrieve(
+        self, query: str, top_k: int = 5
+    ) -> Tuple[List[Tuple[Dict, float]], List[Dict]]:
         """
         Retrieve top-k docs for query via live PubMed fetch + BM25.
 
@@ -52,9 +55,7 @@ class LivePubMedRetriever:
 
         top_indices = scores.argsort()[-top_k:][::-1]
         results = [
-            (fetched_docs[i], float(scores[i]))
-            for i in top_indices
-            if scores[i] > 0
+            (fetched_docs[i], float(scores[i])) for i in top_indices if scores[i] > 0
         ]
 
         return results, fetched_docs

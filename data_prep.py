@@ -5,7 +5,7 @@ Data preparation: Download PubMedQA and prepare corpus for retrieval.
 import json
 import os
 import pickle
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
 from datasets import load_dataset
 from tqdm import tqdm
@@ -62,14 +62,16 @@ def prepare_corpus(dataset) -> Tuple[List[Dict], List[Dict]]:
             gold_doc_ids.append(doc_id)
             doc_id += 1
 
-        qa_pairs.append({
-            "qa_id": idx,
-            "pubid": pubid,
-            "question": question,
-            "long_answer": long_answer,
-            "final_decision": final_decision,
-            "gold_doc_ids": gold_doc_ids,
-        })
+        qa_pairs.append(
+            {
+                "qa_id": idx,
+                "pubid": pubid,
+                "question": question,
+                "long_answer": long_answer,
+                "final_decision": final_decision,
+                "gold_doc_ids": gold_doc_ids,
+            }
+        )
 
     return corpus, qa_pairs
 

@@ -10,11 +10,12 @@ Flow:
 """
 
 import time
+from typing import Dict, List, Optional
+
 import requests
-from typing import List, Dict, Optional
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-EFETCH_URL  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
 
 def _clean_query(query: str) -> str:
@@ -23,12 +24,41 @@ def _clean_query(query: str) -> str:
     Strips question words, punctuation, and keeps medical keywords.
     """
     import re
+
     # Remove question/conversational words
     stopwords = {
-        "i", "am", "have", "having", "give", "me", "a", "an", "the",
-        "is", "are", "does", "do", "what", "how", "why", "can", "my",
-        "please", "prescription", "tell", "about", "and", "or", "for",
-        "with", "severe", "some", "any", "also", "been", "been"
+        "i",
+        "am",
+        "have",
+        "having",
+        "give",
+        "me",
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "does",
+        "do",
+        "what",
+        "how",
+        "why",
+        "can",
+        "my",
+        "please",
+        "prescription",
+        "tell",
+        "about",
+        "and",
+        "or",
+        "for",
+        "with",
+        "severe",
+        "some",
+        "any",
+        "also",
+        "been",
+        "been",
     }
     words = re.sub(r"[^a-zA-Z0-9 ]", " ", query.lower()).split()
     keywords = [w for w in words if w not in stopwords and len(w) > 2]
@@ -110,14 +140,16 @@ def _parse_xml(xml_text: str, pmids: List[str]) -> List[Dict]:
             if not text:
                 continue
 
-            docs.append({
-                "doc_id": f"pubmed_live_{pmid}_{i}",
-                "pubid": int(pmid) if pmid.isdigit() else pmid,
-                "section_label": label,
-                "text": text,
-                "source": "live_pubmed",
-                "title": title,
-            })
+            docs.append(
+                {
+                    "doc_id": f"pubmed_live_{pmid}_{i}",
+                    "pubid": int(pmid) if pmid.isdigit() else pmid,
+                    "section_label": label,
+                    "text": text,
+                    "source": "live_pubmed",
+                    "title": title,
+                }
+            )
 
     return docs
 

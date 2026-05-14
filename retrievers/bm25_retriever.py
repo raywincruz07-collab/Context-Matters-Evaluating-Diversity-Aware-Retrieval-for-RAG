@@ -4,12 +4,12 @@ BM25 sparse retriever using rank_bm25.
 
 import os
 import pickle
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
 from rank_bm25 import BM25Okapi
 
-from retrievers import BaseRetriever
 from config import INDEX_DIR
+from retrievers import BaseRetriever
 
 
 class BM25Retriever(BaseRetriever):

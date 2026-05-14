@@ -5,13 +5,13 @@ Docs: https://www.ncbi.nlm.nih.gov/books/NBK25501/
 """
 
 import time
-import requests
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
+import requests
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-EFETCH_URL  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
 
 def search_pubmed(query: str, max_results: int = 20) -> List[str]:
@@ -80,7 +80,7 @@ def _parse_abstracts_xml(xml_text: str) -> List[Dict]:
             if abstract_el is not None:
                 for text_el in abstract_el.findall("AbstractText"):
                     label = text_el.get("Label", "ABSTRACT")
-                    text  = "".join(text_el.itertext()).strip()
+                    text = "".join(text_el.itertext()).strip()
                     if text:
                         sections.append({"label": label, "text": text})
 
@@ -88,17 +88,21 @@ def _parse_abstracts_xml(xml_text: str) -> List[Dict]:
             if not sections:
                 full_text = "".join(
                     "".join(t.itertext())
-                    for t in (abstract_el.findall("AbstractText") if abstract_el else [])
+                    for t in (
+                        abstract_el.findall("AbstractText") if abstract_el else []
+                    )
                 ).strip()
                 if full_text:
                     sections = [{"label": "ABSTRACT", "text": full_text}]
 
             if sections:
-                results.append({
-                    "pubid": pmid,
-                    "title": title,
-                    "sections": sections,
-                })
+                results.append(
+                    {
+                        "pubid": pmid,
+                        "title": title,
+                        "sections": sections,
+                    }
+                )
 
         except Exception:
             continue
@@ -138,14 +142,16 @@ def fetch_docs_for_query(
     doc_id = doc_id_offset
     for article in articles:
         for section in article["sections"]:
-            docs.append({
-                "doc_id": doc_id,
-                "pubid": article["pubid"],
-                "title": article["title"],
-                "section_label": section["label"],
-                "text": section["text"],
-                "source": "pubmed_live",
-            })
+            docs.append(
+                {
+                    "doc_id": doc_id,
+                    "pubid": article["pubid"],
+                    "title": article["title"],
+                    "section_label": section["label"],
+                    "text": section["text"],
+                    "source": "pubmed_live",
+                }
+            )
             doc_id += 1
 
     return docs

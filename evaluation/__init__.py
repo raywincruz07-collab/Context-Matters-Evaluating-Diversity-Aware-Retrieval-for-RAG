@@ -10,16 +10,16 @@ Phase 1 baseline metrics:
 
 import re
 import string
-from typing import List, Dict, Tuple
 from collections import Counter
+from typing import Dict, List, Tuple
 
 
 def normalize_answer(text: str) -> str:
     """Lowercase, remove punctuation, articles, extra whitespace."""
     text = text.lower()
-    text = re.sub(r'\b(a|an|the)\b', ' ', text)
-    text = text.translate(str.maketrans('', '', string.punctuation))
-    text = ' '.join(text.split())
+    text = re.sub(r"\b(a|an|the)\b", " ", text)
+    text = text.translate(str.maketrans("", "", string.punctuation))
+    text = " ".join(text.split())
     return text
 
 
@@ -76,7 +76,9 @@ def rouge_l(prediction: str, ground_truth: str) -> float:
     return f1
 
 
-def retrieval_recall_at_k(retrieved_doc_ids: List[int], gold_doc_ids: List[int]) -> float:
+def retrieval_recall_at_k(
+    retrieved_doc_ids: List[int], gold_doc_ids: List[int]
+) -> float:
     """What fraction of gold documents are in the retrieved set?"""
     if not gold_doc_ids:
         return 0.0
