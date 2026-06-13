@@ -1,7 +1,37 @@
-# MedRAG — Medical Retrieval-Augmented Generation Pipeline
+# Context Matters — Evaluating Diversity-Aware Retrieval for RAG
 
-**Team Project: Context Matters — Evaluating Diversity-Aware Retrieval for RAG**  
+**Team Project**  
 University of Mannheim | Chair of Data Science
+
+**MedRAG** is the working name for the medical Retrieval-Augmented Generation pipeline developed for this evaluation.
+
+## Problem Statement
+
+Retrieval quality dictates RAG system performance. This project establishes a rigorous evaluation framework to compare the effectiveness of diverse retrieval architectures (sparse, dense, late-interaction) specifically within the biomedical domain using the PubMedQA dataset.
+
+## Evaluation Flow
+
+```mermaid
+flowchart TD
+    Corpus[(PubMedQA Corpus)] --> BM25[BM25]
+    Corpus --> DPR[Original DPR]
+    Corpus --> Contriever[Contriever]
+    Corpus --> ColBERTv2[ColBERTv2]
+    
+    Q[User Question] --> BM25
+    Q --> DPR
+    Q --> Contriever
+    Q --> ColBERTv2
+    
+    BM25 --> TopK[Top-K Context]
+    DPR --> TopK
+    Contriever --> TopK
+    ColBERTv2 --> TopK
+    
+    TopK --> LLM{Maki API: ministral-3-14b}
+    Q --> LLM
+    LLM --> Eval[Metrics: Recall@5, MRR, F1, ROUGE-L]
+```
 
 ## Overview
 
@@ -66,6 +96,27 @@ medical-rag-project/
 │   └── embeddings/           # (generated) precomputed embeddings
 └── results/                  # Final evaluation CSVs
 ```
+
+## Installation & Reproducibility
+
+Dependencies are listed in `requirements.txt`. Note that executing the full evaluation pipeline requires an active key for the Mannheim Maki API.
+
+```bash
+pip install -r requirements.txt
+```
+
+## Precomputed Results
+
+To inspect the findings without executing the pipeline or requiring API credentials, all final outputs are preserved in the `results/` directory.
+
+## Limitations
+
+- **Sprint 1 Focus:** The current iteration only implements basic retrieval metrics.
+- **Biomedical Specificity:** Certain general-domain retrievers (like Original DPR) underperform here; results do not necessarily generalize to open-domain QA.
+
+## Medical Disclaimer
+
+This project is for academic research and evaluation of retrieval systems only. It is not intended to provide medical advice, diagnosis, or treatment.
 
 ## References
 
