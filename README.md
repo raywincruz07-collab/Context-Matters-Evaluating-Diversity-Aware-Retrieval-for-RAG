@@ -125,3 +125,8 @@ This project is for academic research and evaluation of retrieval systems only. 
 - Izacard, G., & Grave, E. (2022). Contriever. TMLR 2022.
 - Khattab, O., & Zaharia, M. (2020). ColBERT. SIGIR 2020.
 - Lewis, P., et al. (2020). Retrieval-Augmented Generation. NeurIPS 2020.
+
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
