@@ -1,76 +1,170 @@
-# MedRAG — Medical Retrieval-Augmented Generation Pipeline
+# MedRAG — Diversity-Aware Retrieval-Augmented Generation Pipeline
 
 **Team Project: Context Matters — Evaluating Diversity-Aware Retrieval for RAG**  
-University of Mannheim | Chair of Data Science
+University of Mannheim | Chair of Data Science | Supervisor: Andreea Iana
 
 ## Overview
 
-This is the final Phase 1 (Sprint 1) baseline RAG system for medical question answering using PubMedQA. It evaluates 4 interchangeable retrievers (BM25, Original DPR, Contriever, ColBERTv2) with a fixed cloud-based LLM generator.
+A two-sprint RAG evaluation pipeline comparing 4 retrieval strategies (BM25, DPR,
+Contriever, ColBERTv2) with and without MMR diversification, evaluated on two
+datasets: PubMedQA (Sprint 1) and BEIR HotpotQA (Sprint 2). Generator is fixed
+across all conditions: Mannheim Maki API (qwen3.5-122b, temperature=0.0, max_tokens=512).
 
-> **Note:** The old local Ollama/Gemma pipeline is now obsolete and superseded by the Mannheim Maki API for consistency across experiments.
+---
 
-## Final Sprint 1 Setup
+## Sprint 1 — PubMedQA Baseline
 
-- **Dataset**: PubMedQA-derived corpus
-- **Corpus size**: 3,358 documents
-- **Questions**: 1,000
-- **Retrievers**: BM25, Original DPR, Contriever, ColBERTv2
-- **Fixed generator**: Mannheim Maki API
-- **Model**: ministral-3-14b
-- **Temperature**: 0.0
-- **Max tokens**: 512
-- **Top-k**: 5
-
-## Final Results Table (Top-5)
+**Dataset:** PubMedQA-derived corpus — 3,358 documents, 1,000 questions.  
+**Model:** ministral-3-14b via Mannheim Maki API.
 
 | Rank | Retriever | Recall@5 | MRR | F1 | ROUGE-L |
 |------|-----------|----------|-----|----|---------|
-| 1 | **ColBERTv2** | 0.750586 | 0.979450 | 0.233563 | 0.154260 |
-| 2 | **Contriever** | 0.605600 | 0.952733 | 0.229693 | 0.154214 |
-| 3 | **BM25** | 0.599211 | 0.911517 | 0.224442 | 0.151232 |
-| 4 | **Original DPR** | 0.267880 | 0.474600 | 0.168862 | 0.116195 |
+| 1 | **ColBERTv2** | 0.7506 | 0.9795 | 0.2336 | 0.1543 |
+| 2 | **Contriever** | 0.6056 | 0.9527 | 0.2297 | 0.1542 |
+| 3 | **BM25** | 0.5992 | 0.9115 | 0.2244 | 0.1512 |
+| 4 | **DPR** | 0.2679 | 0.4746 | 0.1689 | 0.1162 |
 
-## Interpretation
+Results in [`results/sprint1/`](results/sprint1/).
 
-- **ColBERTv2** is the strongest Sprint 1 baseline retriever.
-- **Original DPR** performs weakest, plausibly because it is trained mainly for open-domain QA and is not biomedical-domain adapted.
-- **Exact Match** is 0.0 for all retrievers and is not useful for long-form generated medical answers.
-- **F1 and ROUGE-L** are weak lexical indicators.
-- **Sprint 2** should add MMR, clustering, DPP, faithfulness, hallucination, coverage, and diversity metrics.
+---
+
+## Sprint 2 — BEIR HotpotQA + MMR Diversification
+
+**Dataset:** BEIR HotpotQA, Option B subsampling — 500 test queries (seed=42).
+Corpus: 997 unique gold passages + 50 random negatives per query = **25,997 docs total**.
+BEIR qrels contain no free-text answers; EM/F1/ROUGE-L not computed — evaluation
+uses Recall@5, MRR, retrieval diversity, and faithfulness NLI.
+
+**Experimental grid:** 4 retrievers × 6 MMR conditions (λ ∈ {none, 0.0, 0.25, 0.5, 0.75, 1.0})
+= 24 combinations, 12,000 total generations, **0 errors**.
+
+**Model:** qwen3.5-122b via Mannheim Maki API.
+
+### Core Finding
+
+Diversification (decreasing λ) **monotonically reduces** both Recall@5 and
+faithfulness NLI across all 4 retrievers. Relative Recall@5 drop from λ=1.0 → λ=0.0:
+
+| Retriever | Recall@5 drop |
+|-----------|--------------|
+| BM25 | 33.6% |
+| DPR | 38.7% |
+| Contriever | 33.1% |
+| ColBERTv2 | 40.2% |
+
+### Cross-Sprint Comparison
+
+DPR Recall@5 rose from 0.268 (Sprint 1, PubMedQA) to 0.648 (Sprint 2, BEIR) —
+consistent with DPR's NQ/Wikipedia training distribution matching HotpotQA better
+than biomedical text.
+
+### New Sprint 2 Metrics
+
+- **Retrieval diversity:** mean pairwise cosine distance among top-5 retrieved docs'
+  Contriever embeddings.
+- **Faithfulness NLI:** entailment probability (facebook/bart-large-mnli) between
+  generated answer (hypothesis) and each retrieved context doc (premise); max across 5 docs.
+
+Results in [`results/sprint2/`](results/sprint2/).
+
+---
 
 ## Project Structure
 
 ```
-medical-rag-project/
-├── requirements.txt          # Dependencies
+medical-rag-maki-colab/
 ├── src/
-│   ├── app.py                    # Streamlit UI
-│   ├── config.py                 # Configuration
-│   ├── data_prep.py              # PubMedQA download & processing
-│   ├── pipeline.py               # RAG pipeline (retriever + generator + eval)
-│   ├── generator.py              # Generator config (using Maki API)
-│   ├── eval_all_retrievers_safe.py # Safe resumable evaluation script
+│   ├── config.py                       # All constants (Sprint 1 + Sprint 2)
+│   ├── data_prep.py                    # Sprint 1: PubMedQA corpus builder
+│   ├── data_prep_hotpot.py             # Sprint 2: HotpotQA distractor corpus
+│   ├── data_prep_hotpot_beir.py        # Sprint 2: BEIR HotpotQA Option B corpus
+│   ├── eval_all_retrievers_safe.py     # Resumable eval harness (Sprint 1 + Sprint 2)
+│   ├── pipeline.py                     # RAG pipeline with diversification param
+│   ├── generator.py                    # Maki API generator
+│   ├── app.py                          # Streamlit demo UI
+│   ├── pubmed_fetch.py                 # Live PubMed fetcher (for app.py)
 │   ├── retrievers/
-│   │   ├── __init__.py           # BaseRetriever abstract class
-│   │   ├── factory.py            # Retriever factory
-│   │   ├── bm25_retriever.py     # BM25 (sparse)
-│   │   ├── dpr_original_retriever.py # Original Facebook DPR
-│   │   ├── dense_retriever.py    # Contriever (dense + FAISS)
-│   │   └── colbert_retriever.py  # ColBERTv2 (late interaction)
+│   │   ├── __init__.py                 # BaseRetriever interface
+│   │   ├── factory.py                  # Retriever factory
+│   │   ├── bm25_retriever.py           # BM25 (sparse, rank-bm25)
+│   │   ├── dpr_original_retriever.py   # Original Facebook DPR + FAISS
+│   │   ├── dense_retriever.py          # Contriever + FAISS
+│   │   └── colbert_retriever.py        # ColBERTv2 via RAGatouille (Colab-patched)
+│   ├── diversification/
+│   │   ├── __init__.py
+│   │   └── mmr.py                      # MMR reranking + corpus embedding cache
 │   └── evaluation/
-│       └── __init__.py           # Metrics (EM, F1, ROUGE-L, Recall@K, MRR)
-├── data/
-│   ├── corpus.json           # (generated) retrieval corpus
-│   ├── qa_pairs.json         # (generated) QA evaluation pairs
-│   ├── indices/              # (generated) retriever indices
-│   └── embeddings/           # (generated) precomputed embeddings
-└── results/                  # Final evaluation CSVs
+│       └── __init__.py                 # Metrics: Recall@K, MRR, EM, F1, ROUGE-L,
+│                                       #          retrieval_diversity, faithfulness_nli
+├── tests/
+│   └── test_mmr.py                     # 11 MMR unit tests (all passing)
+├── results/
+│   ├── sprint1/
+│   │   ├── raw/                        # Sprint 1 per-retriever CSVs (4 retrievers)
+│   │   └── final_csv_outputs/          # Sprint 1 formatted summary outputs
+│   └── sprint2/
+│       ├── raw/                        # 24 Sprint 2 CSVs (4 retrievers × 6 conditions)
+│       ├── summary/                    # Master summary CSV
+│       └── graphs/                     # 5 analysis graphs (PNG)
+├── reports/
+│   ├── DEEP_UNDERSTANDING_BRIEF.md     # Sprint 1 contributor/architecture guide
+│   └── sprint2/
+│       ├── methods_notes.md            # Sprint 2 methodology reference
+│       └── SUBMISSION_CHECKLIST.md     # Sprint 2 submission status
+├── notebooks/
+│   └── Sprint1_Baseline_RAG_Evaluation.ipynb
+├── create_colab_zip.py                 # Builds medical-rag-maki-colab-sprint2.zip
+├── download_hotpotqa.py                # Downloads HotpotQA distractor dataset
+└── requirements.txt
 ```
+
+---
+
+## Running the Evaluation
+
+### Environment
+
+```bash
+export MAKI_API_KEY="your_key_here"          # Linux/Mac/Git Bash
+$env:MAKI_API_KEY = "your_key_here"          # Windows PowerShell
+```
+
+`MAKI_HOST` and `MAKI_MODEL` default to `https://maki.uni-mannheim.de/v1` and
+`qwen3.5-122b` respectively. Override via env vars if needed.
+
+### Sprint 1 — PubMedQA
+
+```bash
+cd src
+python eval_all_retrievers_safe.py --top_k 5 --with-generation
+```
+
+### Sprint 2 — BEIR HotpotQA (Option B)
+
+```bash
+cd src
+python eval_all_retrievers_safe.py --beir --top_k 5 --with-generation
+```
+
+Data is downloaded automatically from HuggingFace on first run
+(`BeIR/hotpotqa` corpus/queries/qrels).
+
+### Colab Deployment
+
+```bash
+python create_colab_zip.py   # produces medical-rag-maki-colab-sprint2.zip
+```
+
+Upload the zip to Colab, extract, and run from `src/`.
+
+---
 
 ## References
 
-- Jin, Q., et al. (2019). PubMedQA: A Dataset for Biomedical Research Question Answering. EMNLP 2019.
-- Karpukhin, V., et al. (2020). Dense Passage Retrieval for Open-Domain QA. EMNLP 2020.
-- Izacard, G., & Grave, E. (2022). Contriever. TMLR 2022.
-- Khattab, O., & Zaharia, M. (2020). ColBERT. SIGIR 2020.
-- Lewis, P., et al. (2020). Retrieval-Augmented Generation. NeurIPS 2020.
+- Carbonell & Goldstein (1998). The Use of MMR, Diversity-Based Reranking for Reordering Documents. SIGIR 1998.
+- Jin et al. (2019). PubMedQA: A Dataset for Biomedical Research QA. EMNLP 2019.
+- Karpukhin et al. (2020). Dense Passage Retrieval for Open-Domain QA. EMNLP 2020.
+- Izacard & Grave (2022). Unsupervised Dense Information Retrieval with Contrastive Learning. TMLR 2022.
+- Khattab & Zaharia (2020). ColBERT: Efficient and Effective Passage Search. SIGIR 2020.
+- Lewis et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. NeurIPS 2020.
+- Thakur et al. (2021). BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021.

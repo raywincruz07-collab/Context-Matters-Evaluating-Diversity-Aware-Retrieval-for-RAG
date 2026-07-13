@@ -6,12 +6,18 @@ Phase 1 baseline metrics:
 - Token-level F1
 - ROUGE-L
 - Retrieval metrics: Recall@K, MRR
+
+Sprint 2 additions:
+- retrieval_diversity: mean pairwise cosine distance among retrieved doc embeddings
+- faithfulness_nli: NLI entailment score of generated answer against context docs
 """
 
 import re
 import string
 from collections import Counter
 from typing import Dict, List, Tuple
+
+import numpy as np
 
 
 def normalize_answer(text: str) -> str:
@@ -131,3 +137,87 @@ def evaluate_batch(results: List[Dict]) -> Dict[str, float]:
         metrics[f"avg_{key}"] = sum(values) / len(values)
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2 metrics
+# ---------------------------------------------------------------------------
+
+
+def retrieval_diversity(doc_embeddings: List[np.ndarray]) -> float:
+    """
+    Mean pairwise cosine distance among the final retrieved doc embeddings.
+
+    Cosine distance = 1 - cosine_similarity.  Range: [0.0, 2.0] (L2-normalised
+    vectors bound similarity to [-1, 1], so distance to [0, 2]).
+
+    Args:
+        doc_embeddings: List of L2-normalised embedding vectors for each
+                        retrieved document.  Computed on the FINAL top-k set
+                        (after any MMR reranking) — never on gold documents.
+
+    Returns:
+        Mean pairwise cosine distance as a float.  Returns 0.0 for fewer
+        than 2 documents (no pairs to compare).
+    """
+    n = len(doc_embeddings)
+    if n < 2:
+        return 0.0
+
+    embs = np.array(doc_embeddings, dtype=np.float32)
+    # L2-normalise (guard in case caller didn't)
+    norms = np.linalg.norm(embs, axis=1, keepdims=True)
+    norms = np.where(norms > 0, norms, 1.0)
+    embs = embs / norms
+
+    # Cosine similarity matrix via dot product (O(n^2) but n <= top_k ~ 5)
+    sim_matrix = embs @ embs.T  # [n, n]
+    # Extract upper-triangle (pairwise, no self-similarity)
+    triu_indices = np.triu_indices(n, k=1)
+    pairwise_sims = sim_matrix[triu_indices]
+
+    mean_distance = float(np.mean(1.0 - pairwise_sims))
+    return mean_distance
+
+
+def faithfulness_nli(
+    generated_answer: str,
+    context_docs: List[str],
+    nli_model,
+) -> float:
+    """
+    Estimate faithfulness via NLI: max entailment probability of the generated
+    answer (hypothesis) against each context document (premise).
+
+    Uses facebook/bart-large-mnli (zero-shot NLI).  The generated answer and
+    context come from the RAG output — gold references are NEVER passed here.
+
+    Args:
+        generated_answer: The LLM-generated answer string.
+        context_docs: List of context document texts used for generation.
+        nli_model: A loaded pipeline("zero-shot-classification", ...) instance
+                   or any callable with the same interface.
+
+    Returns:
+        Max entailment probability across all context docs.  Range [0.0, 1.0].
+        Returns 0.0 if context_docs is empty or generated_answer is empty.
+    """
+    if not generated_answer.strip() or not context_docs:
+        return 0.0
+
+    max_entailment = 0.0
+    for premise in context_docs:
+        if not premise.strip():
+            continue
+        result = nli_model(
+            premise,
+            candidate_labels=[generated_answer],
+            hypothesis_template="{}",
+        )
+        # zero-shot-classification returns scores for each label
+        # The single label score is the entailment probability
+        score = float(result["scores"][0])
+        if score > max_entailment:
+            max_entailment = score
+
+    return max_entailment

@@ -49,9 +49,29 @@ class RAGPipeline:
             else:
                 print("Set MAKI_API_KEY or check the API host/model.")
 
-    def query(self, question: str, top_k: Optional[int] = None) -> Dict:
+    def _get_mmr_embed_fn(self):
+        """Lazy-load a ContrieverRetriever and return its _encode method."""
+        if not hasattr(self, "_mmr_retriever") or self._mmr_retriever is None:
+            from retrievers.dense_retriever import ContrieverRetriever
+            self._mmr_retriever = ContrieverRetriever()
+            self._mmr_retriever._load_model()
+        return self._mmr_retriever._encode
+
+    def query(
+        self,
+        question: str,
+        top_k: Optional[int] = None,
+        diversification: Optional[str] = None,
+    ) -> Dict:
         """
         Run full RAG pipeline for a single question.
+
+        Args:
+            question: Input question string.
+            top_k: Override the default retrieval depth.
+            diversification: Optional reranking strategy.  Accepted values:
+                - None: standard retrieval (Sprint 1 behaviour unchanged)
+                - "mmr_<lambda>": MMR reranking with given lambda, e.g. "mmr_0.5"
 
         Returns dict with:
             - question
@@ -59,12 +79,23 @@ class RAGPipeline:
             - answer: generated answer
             - retrieval_time: seconds
             - generation_time: seconds
+            - diversification: the strategy used (or None)
         """
+        from config import MMR_CANDIDATE_POOL
+        from diversification.mmr import mmr_rerank
+
         k = top_k or self.top_k
 
-        # Retrieve
         t0 = time.time()
-        retrieved = self.retriever.retrieve(question, top_k=k)
+        if diversification is not None and diversification.startswith("mmr_"):
+            lambda_param = float(diversification.split("_", 1)[1])
+            candidates = self.retriever.retrieve(question, top_k=MMR_CANDIDATE_POOL)
+            embed_fn = self._get_mmr_embed_fn()
+            retrieved = mmr_rerank(
+                question, candidates, top_k=k, lambda_param=lambda_param, embed_fn=embed_fn
+            )
+        else:
+            retrieved = self.retriever.retrieve(question, top_k=k)
         retrieval_time = time.time() - t0
 
         # Generate
@@ -79,6 +110,7 @@ class RAGPipeline:
             "answer": answer,
             "retrieval_time": retrieval_time,
             "generation_time": generation_time,
+            "diversification": diversification,
         }
 
     def evaluate(

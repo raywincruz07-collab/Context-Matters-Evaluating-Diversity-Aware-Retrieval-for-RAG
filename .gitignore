@@ -1,9 +1,21 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+.pytest_cache/
+.ragatouille/
 .env
+.DS_Store
 *.zip
+*.log
+outputs/
+
+# Data files — large/regenerable, generated at runtime
 data/embeddings/
 data/indices/
-.ragatouille/
-.DS_Store
+data/corpus.json
+data/qa_pairs.json
+data/hotpot_corpus.json
+data/hotpot_qa_pairs.json
+data/hotpotqa_distractor/
+data/hotpot_beir_corpus.json
+data/hotpot_beir_qa_pairs.json
