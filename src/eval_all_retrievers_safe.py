@@ -351,6 +351,15 @@ def main_sprint2_beir():
         nargs="+",
         default=["bm25", "dpr", "contriever", "colbertv2"],
     )
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        default=None,
+        help=(
+            "Conditions to run (e.g. none mmr_0.5 dpp_map kmeans_k5 dpp_seed42). "
+            "Default: none + MMR lambda sweep from config."
+        ),
+    )
     args = parser.parse_args()
 
     os.makedirs(args.results_dir, exist_ok=True)
@@ -382,7 +391,13 @@ def main_sprint2_beir():
         NLI_MODEL,
     )
 
-    conditions = ["none"] + [f"mmr_{lam}" for lam in MMR_LAMBDAS]
+    if args.conditions is not None:
+        from diversification.dispatch import parse_condition as _parse_cond
+        for _c in args.conditions:
+            _parse_cond(_c)  # raises ValueError on unrecognised condition
+        conditions = args.conditions
+    else:
+        conditions = ["none"] + [f"mmr_{lam}" for lam in MMR_LAMBDAS]
     print(
         f"[seed={HOTPOT_BEIR_SEED}] Sprint 2 BEIR: "
         f"{len(args.retrievers)} retrievers Ã— {len(conditions)} conditions = "
@@ -492,10 +507,7 @@ def main_sprint2_beir():
                 except Exception as exc:
                     print(f"    Warning: could not read checkpoint ({exc}), starting fresh.")
 
-            use_mmr = condition != "none"
-            mmr_lambda = float(condition.split("_", 1)[1]) if use_mmr else None
-
-            from diversification.mmr import mmr_rerank
+            from diversification.dispatch import is_diversified, rerank as diversify_rerank
 
             retrieval_times: list = []
             condition_errors = 0
@@ -531,13 +543,13 @@ def main_sprint2_beir():
 
                 try:
                     t1 = time.time()
-                    if use_mmr:
+                    if is_diversified(condition):
                         candidates = retriever.retrieve(qa["question"], top_k=MMR_CANDIDATE_POOL)
-                        retrieved = mmr_rerank(
+                        retrieved = diversify_rerank(
+                            condition,
                             qa["question"],
                             candidates,
                             top_k=args.top_k,
-                            lambda_param=mmr_lambda,
                             embed_fn=contriever_for_mmr._encode,
                             precomputed_embs=doc_id_to_emb,
                         )
@@ -628,11 +640,25 @@ def main_sprint2_beir():
     df_sum.to_csv(sum_path, index=False)
     print(f"\nSaved summary to {sum_path}")
 
+    meta_path = os.path.join(args.results_dir, "EXPERIMENT_METADATA_sprint2_beir.json")
+    existing_meta: dict = {}
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path) as _f:
+                existing_meta = json.load(_f)
+        except Exception:
+            existing_meta = {}
+
+    all_retrievers = sorted(set(existing_meta.get("retrievers", [])) | set(args.retrievers))
+    all_conditions = sorted(set(existing_meta.get("conditions", [])) | set(conditions))
+
     meta = {
         "sprint": 2,
         "dataset": "BEIR HotpotQA (Option B subsampling)",
-        "retrievers": args.retrievers,
-        "conditions": conditions,
+        "retrievers": all_retrievers,
+        "conditions": all_conditions,
+        "retrievers_this_run": args.retrievers,
+        "conditions_this_run": conditions,
         "sample_size": HOTPOT_BEIR_SAMPLE_SIZE,
         "seed": HOTPOT_BEIR_SEED,
         "negatives_per_query": HOTPOT_BEIR_NEGATIVES_PER_QUERY,
@@ -645,7 +671,6 @@ def main_sprint2_beir():
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "git_commit": _git_commit_hash(),
     }
-    meta_path = os.path.join(args.results_dir, "EXPERIMENT_METADATA_sprint2_beir.json")
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=4)
     print(f"Saved metadata to {meta_path}")
