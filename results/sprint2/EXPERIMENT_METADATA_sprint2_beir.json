@@ -2,6 +2,9 @@
     "sprint": 2,
     "dataset": "BEIR HotpotQA (Option B subsampling)",
     "retrievers": [
+        "bm25",
+        "dpr",
+        "contriever",
         "colbertv2"
     ],
     "conditions": [
