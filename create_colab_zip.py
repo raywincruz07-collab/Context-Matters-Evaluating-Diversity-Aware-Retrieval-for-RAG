@@ -11,7 +11,9 @@ import zipfile
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 ZIP_PATH = os.path.join(PROJECT_ROOT, "medical-rag-maki-colab-sprint2.zip")
 
-# Directories to walk recursively (relative to PROJECT_ROOT)
+# Directories to walk recursively (relative to PROJECT_ROOT).
+# demo/ is intentionally excluded — it holds the optional Streamlit UI
+# (app.py + pubmed_fetch.py) which is not part of the evaluated pipeline.
 INCLUDE_DIRS = ["src", "tests"]
 
 # Individual root-level files to include
