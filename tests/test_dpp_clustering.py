@@ -7,6 +7,8 @@ so that diversity-aware methods must pull from other clusters.
 
 import sys
 import os
+from collections import Counter
+from itertools import combinations
 
 import numpy as np
 import pytest
@@ -14,7 +16,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from diversification._common import cosine_similarity_matrix, prepare_candidates
-from diversification.dpp import build_dpp_kernel, dpp_rerank
+from diversification.dpp import _sample_kdpp, build_dpp_kernel, dpp_rerank
 from diversification.clustering import cluster_rerank
 from diversification.dispatch import is_diversified, parse_condition, rerank
 
@@ -131,6 +133,123 @@ class TestDPPKernel:
         L = build_dpp_kernel(norm_scores, embeddings)
         eigenvalues = np.linalg.eigvalsh(L)
         assert float(eigenvalues.min()) >= -1e-6
+
+
+# ---------------------------------------------------------------------------
+# exact k-DPP sampler tests
+# ---------------------------------------------------------------------------
+
+class TestSampleKDPP:
+    def test_exact_cardinality_and_uniqueness(self):
+        L = np.diag([0.2, 0.5, 1.0, 2.0, 4.0])
+        for seed in range(20):
+            sample = _sample_kdpp(L, 3, np.random.default_rng(seed))
+            assert len(sample) == 3
+            assert len(set(sample)) == 3
+            assert all(0 <= item < 5 for item in sample)
+
+    def test_fixed_seed_reproducibility(self):
+        L = np.array([[1.0, 0.3, 0.1], [0.3, 1.2, 0.2], [0.1, 0.2, 0.8]])
+        first = _sample_kdpp(L, 2, np.random.default_rng(17))
+        second = _sample_kdpp(L, 2, np.random.default_rng(17))
+        assert first == second
+
+    def test_k_zero(self):
+        assert _sample_kdpp(np.eye(3), 0, np.random.default_rng(1)) == []
+
+    def test_nonsquare_kernel_raises(self):
+        with pytest.raises(ValueError, match="square"):
+            _sample_kdpp(np.ones((2, 3)), 0, np.random.default_rng(1))
+
+    def test_nonfinite_kernel_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            _sample_kdpp(np.diag([1.0, np.inf]), 0, np.random.default_rng(1))
+
+    def test_nonsymmetric_kernel_raises(self):
+        L = np.array([[1.0, 0.5], [0.0, 1.0]])
+        with pytest.raises(ValueError, match="symmetric"):
+            _sample_kdpp(L, 0, np.random.default_rng(1))
+
+    @pytest.mark.parametrize("k", [-1, 4, 1.5])
+    def test_invalid_k(self, k):
+        with pytest.raises(ValueError, match="k must"):
+            _sample_kdpp(np.eye(3), k, np.random.default_rng(1))
+
+    def test_rank_below_k_raises(self):
+        with pytest.raises(ValueError, match="zero mass"):
+            _sample_kdpp(np.diag([2.0, 0.0, 0.0]), 2, np.random.default_rng(1))
+
+    def test_zero_kernel_raises(self):
+        with pytest.raises(ValueError, match="zero mass"):
+            _sample_kdpp(np.zeros((3, 3)), 1, np.random.default_rng(1))
+
+    def test_tiny_negative_eigenvalue_is_tolerated(self):
+        L = np.diag([-1e-12, 1.0, 2.0])
+        sample = _sample_kdpp(L, 2, np.random.default_rng(3))
+        assert set(sample) == {1, 2}
+
+    def test_materially_indefinite_kernel_raises(self):
+        with pytest.raises(ValueError, match="positive semidefinite"):
+            _sample_kdpp(np.diag([-1e-4, 1.0, 2.0]), 2, np.random.default_rng(1))
+
+    def test_tiny_scale_materially_indefinite_kernel_raises(self):
+        L = np.diag([-1e-15, 1e-14, 2e-14])
+        with pytest.raises(ValueError, match="positive semidefinite"):
+            _sample_kdpp(L, 1, np.random.default_rng(1))
+
+    def test_identity_kernel_is_uniform(self):
+        L = np.eye(4)
+        subsets = list(combinations(range(4), 2))
+        counts = Counter()
+        rng = np.random.default_rng(20260808)
+        draws = 12_000
+        for _ in range(draws):
+            counts[tuple(sorted(_sample_kdpp(L, 2, rng)))] += 1
+        empirical = np.array([counts[subset] / draws for subset in subsets])
+        assert 0.5 * np.abs(empirical - 1.0 / len(subsets)).sum() < 0.03
+
+    def test_diagonal_kernel_matches_analytic_distribution(self):
+        diagonal = np.array([0.2, 0.7, 1.5, 3.0])
+        L = np.diag(diagonal)
+        subsets = list(combinations(range(4), 2))
+        weights = np.array([diagonal[i] * diagonal[j] for i, j in subsets])
+        expected = weights / weights.sum()
+        counts = Counter()
+        rng = np.random.default_rng(314159)
+        draws = 20_000
+        for _ in range(draws):
+            counts[tuple(sorted(_sample_kdpp(L, 2, rng)))] += 1
+        empirical = np.array([counts[subset] / draws for subset in subsets])
+        assert 0.5 * np.abs(empirical - expected).sum() < 0.025
+
+    def test_distribution_matches_exhaustive_determinants(self):
+        B = np.array([
+            [1.0, 0.2, 0.0, 0.1, 0.0],
+            [0.3, 0.9, 0.1, 0.0, 0.2],
+            [0.0, 0.4, 1.1, 0.2, 0.0],
+            [0.2, 0.0, 0.3, 0.8, 0.1],
+            [0.1, 0.2, 0.0, 0.3, 0.7],
+        ])
+        L = B @ B.T
+        subsets = list(combinations(range(5), 2))
+        weights = np.array([np.linalg.det(L[np.ix_(subset, subset)]) for subset in subsets])
+        expected = weights / weights.sum()
+        counts = Counter()
+        rng = np.random.default_rng(271828)
+        draws = 30_000
+        for _ in range(draws):
+            counts[tuple(sorted(_sample_kdpp(L, 2, rng)))] += 1
+        empirical = np.array([counts[subset] / draws for subset in subsets])
+        assert 0.5 * np.abs(empirical - expected).sum() < 0.025
+        assert np.max(np.abs(empirical - expected)) < 0.015
+
+    def test_zero_probability_subsets_are_never_sampled(self):
+        L = np.diag([1.0, 2.0, 0.0, 0.0])
+        rng = np.random.default_rng(42)
+        samples = {_sample_kdpp(L, 2, rng)[0] for _ in range(100)}
+        assert samples <= {0, 1}
+        for _ in range(100):
+            assert set(_sample_kdpp(L, 2, rng)) == {0, 1}
 
 
 # ---------------------------------------------------------------------------

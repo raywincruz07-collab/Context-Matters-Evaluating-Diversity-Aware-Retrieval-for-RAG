@@ -92,51 +92,116 @@ def _sample_kdpp(L: np.ndarray, k: int, rng: np.random.Generator) -> List[int]:
     """
     Exact k-DPP sample via eigendecomposition (Kulesza & Taskar Algorithm 1).
     """
+    L = np.asarray(L, dtype=np.float64)
+    if L.ndim != 2 or L.shape[0] != L.shape[1]:
+        raise ValueError("L must be a square matrix")
+    if not np.all(np.isfinite(L)):
+        raise ValueError("L must contain only finite values")
+    if not isinstance(k, (int, np.integer)) or k < 0 or k > L.shape[0]:
+        raise ValueError(f"k must be an integer in [0, {L.shape[0]}]")
+
     n = L.shape[0]
-    k = min(k, n)
+    scale = max(float(np.max(np.abs(L))) if L.size else 0.0, np.finfo(np.float64).tiny)
+    if not np.allclose(L, L.T, rtol=1e-10, atol=1e-12 * scale):
+        raise ValueError("L must be symmetric")
 
-    eigenvalues, eigenvectors = np.linalg.eigh(L)
-    # Clip small negatives from numerical noise
-    eigenvalues = np.clip(eigenvalues, 0, None)
+    eigenvalues, eigenvectors = np.linalg.eigh((L + L.T) / 2.0)
+    eigenvalue_scale = max(
+        float(np.max(np.abs(eigenvalues))) if eigenvalues.size else 0.0,
+        np.finfo(np.float64).tiny,
+    )
+    negative_tolerance = 1e-10 * eigenvalue_scale
+    if eigenvalues.size and float(eigenvalues.min()) < -negative_tolerance:
+        raise ValueError("L must be positive semidefinite")
+    eigenvalues[eigenvalues < 0.0] = 0.0
 
-    # Step 1: select k eigenvectors with prob proportional to lambda/(1+lambda)
-    probs = eigenvalues / (1.0 + eigenvalues)
+    if k == 0:
+        return []
+
+    # E[l, i] is log e_l(lambda_1, ..., lambda_i).  A common rescaling of
+    # all eigenvalues does not change a fixed-cardinality k-DPP and prevents
+    # overflow in the elementary-symmetric-polynomial recurrence.
+    max_eigenvalue = float(eigenvalues.max())
+    if max_eigenvalue == 0.0:
+        raise ValueError("k-DPP has zero mass for the requested cardinality")
+    scaled_eigenvalues = eigenvalues / max_eigenvalue
+    log_eigenvalues = np.full(n, -np.inf, dtype=np.float64)
+    positive = scaled_eigenvalues > 0.0
+    log_eigenvalues[positive] = np.log(scaled_eigenvalues[positive])
+
+    log_E = np.full((k + 1, n + 1), -np.inf, dtype=np.float64)
+    log_E[0, :] = 0.0
+    for i in range(1, n + 1):
+        upper = min(i, k)
+        for degree in range(1, upper + 1):
+            log_E[degree, i] = np.logaddexp(
+                log_E[degree, i - 1],
+                log_eigenvalues[i - 1] + log_E[degree - 1, i - 1],
+            )
+
+    if not np.isfinite(log_E[k, n]):
+        raise ValueError("k-DPP has zero mass for the requested cardinality")
+
+    # Select exactly k eigenvectors using the conditional k-DPP probabilities.
     chosen_vecs: List[int] = []
-    while len(chosen_vecs) < k:
-        chosen_vecs = [i for i in range(n) if rng.random() < probs[i]]
-    chosen_vecs = list(rng.choice(
-        [i for i in range(n) if rng.random() < probs[i]] or list(range(n)),
-        size=k, replace=False,
-    )) if len(chosen_vecs) != k else chosen_vecs[:k]
+    degree = k
+    for i in range(n, 0, -1):
+        if degree == 0:
+            break
+        log_probability = (
+            log_eigenvalues[i - 1]
+            + log_E[degree - 1, i - 1]
+            - log_E[degree, i]
+        )
+        if np.isneginf(log_probability):
+            probability = 0.0
+        else:
+            probability = float(np.exp(log_probability))
+            probability_tolerance = 1e-12
+            if (
+                not np.isfinite(probability)
+                or probability < -probability_tolerance
+                or probability > 1.0 + probability_tolerance
+            ):
+                raise RuntimeError("invalid k-DPP eigenvector-selection probability")
+            probability = min(max(probability, 0.0), 1.0)
+        if rng.random() < probability:
+            chosen_vecs.append(i - 1)
+            degree -= 1
 
-    # Step 2: sample items from the span of chosen eigenvectors
+    if degree != 0 or len(chosen_vecs) != k:
+        raise RuntimeError("failed to select exactly k eigenvectors")
+
+    # Sample from the resulting projection DPP, maintaining an orthonormal
+    # basis and reducing its rank by one after every item selection.
     V = eigenvectors[:, chosen_vecs]  # [n, k]
     selected: List[int] = []
-    remaining = list(range(n))
-
-    for _ in range(k):
-        # Probability of item i proportional to squared norm of its row in V
-        row_norms_sq = np.array([float(np.dot(V[i], V[i])) for i in remaining])
-        row_norms_sq = np.clip(row_norms_sq, 0, None)
-        total = row_norms_sq.sum()
-        if total <= 0:
-            selected.append(rng.choice(remaining))
-            break
-        p = row_norms_sq / total
-        chosen_local = int(rng.choice(len(remaining), p=p))
-        chosen_item = remaining[chosen_local]
+    for rank in range(k, 0, -1):
+        probabilities = np.sum(V * V, axis=1) / rank
+        probabilities = np.clip(probabilities, 0.0, None)
+        probabilities[selected] = 0.0
+        total = float(probabilities.sum())
+        if not np.isfinite(total) or total <= 0.0:
+            raise RuntimeError("invalid projection-DPP item probabilities")
+        probabilities /= total
+        chosen_item = int(rng.choice(n, p=probabilities))
         selected.append(chosen_item)
-        remaining.remove(chosen_item)
 
-        if not remaining:
-            break
+        if rank == 1:
+            continue
 
-        # Project V onto the orthogonal complement of V[chosen_item]
-        e = V[chosen_item].copy()
-        e_norm = float(np.dot(e, e)) ** 0.5
-        if e_norm > 1e-12:
-            e = e / e_norm
-            V = V - np.outer(V @ e, e)
+        pivot = int(np.argmax(np.abs(V[chosen_item, :])))
+        pivot_value = float(V[chosen_item, pivot])
+        if abs(pivot_value) <= np.finfo(np.float64).eps:
+            raise RuntimeError("projection-DPP update encountered a zero pivot")
+        keep = np.arange(rank) != pivot
+        V = V[:, keep] - np.outer(
+            V[:, pivot], V[chosen_item, keep] / pivot_value
+        )
+        V, R = np.linalg.qr(V, mode="reduced")
+        rank_tolerance = np.finfo(np.float64).eps * max(n, rank)
+        if np.any(np.abs(np.diag(R)) <= rank_tolerance):
+            raise RuntimeError("projection-DPP basis lost numerical rank")
 
     return selected
 
@@ -186,13 +251,15 @@ def dpp_rerank(
         rng = np.random.default_rng(seed)
         selected = _sample_kdpp(L, top_k, rng)
 
-    # Pad with remaining items sorted by relevance if selection fell short
-    if len(selected) < top_k:
+    # Greedy MAP may stop early on a numerically singular Schur complement.
+    if mode == "map" and len(selected) < top_k:
         used = set(selected)
         extras = sorted(
             [i for i in range(len(docs)) if i not in used],
             key=lambda i: -norm_scores[i],
         )
         selected = selected + extras[: top_k - len(selected)]
+    elif mode == "sample" and len(selected) != top_k:
+        raise RuntimeError("exact k-DPP sampler returned the wrong cardinality")
 
     return [(docs[i], float(norm_scores[i])) for i in selected[:top_k]]
