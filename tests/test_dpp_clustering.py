@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from diversification._common import cosine_similarity_matrix, prepare_candidates
 import diversification.dpp as dpp_module
 from diversification.dpp import _greedy_map, _sample_kdpp, build_dpp_kernel, dpp_rerank
-from diversification.clustering import cluster_rerank
+import diversification.clustering as clustering_module
+from diversification.clustering import _cluster, cluster_rerank
 from diversification.dispatch import is_diversified, parse_condition, rerank
 
 
@@ -412,8 +413,8 @@ class TestClusterRerank:
         assert ids == [0, 1, 2, 3]
 
     def test_empty_candidates(self):
-        result = cluster_rerank("q", [], top_k=4, embed_fn=lambda t: np.zeros((0, 8)))
-        assert result == []
+        with pytest.raises(ValueError, match="cannot exceed"):
+            cluster_rerank("q", [], top_k=4, embed_fn=lambda t: np.zeros((0, 8)))
 
     def test_top_k_larger_than_candidates(self, candidates_12):
         cands, embs = candidates_12
@@ -425,6 +426,168 @@ class TestClusterRerank:
         cands, embs = candidates_12
         with pytest.raises(ValueError, match="method"):
             cluster_rerank("q", cands, top_k=4, embed_fn=_make_embed_fn(embs), method="bad")
+
+    def test_label_permutation_invariance(self, monkeypatch):
+        cands = [
+            ({"doc_id": i, "text": f"d{i}"}, score)
+            for i, score in enumerate([0.9, 0.8, 0.7, 0.6, 1.0, 0.5])
+        ]
+        embs = np.eye(6, dtype=np.float32)
+        partitions = iter([
+            np.array([0, 0, 1, 1, 2, 2]),
+            np.array([2, 2, 0, 0, 1, 1]),
+        ])
+        monkeypatch.setattr(clustering_module, "_cluster", lambda *args, **kwargs: next(partitions))
+        first = cluster_rerank("q", cands, 5, _make_embed_fn(embs), n_clusters=3)
+        second = cluster_rerank("q", cands, 5, _make_embed_fn(embs), n_clusters=3)
+        assert [doc["doc_id"] for doc, _ in first] == [4, 0, 2, 5, 1]
+        assert [doc["doc_id"] for doc, _ in first] == [
+            doc["doc_id"] for doc, _ in second
+        ]
+
+    def test_truncated_round_uses_cluster_best_relevance(self, monkeypatch):
+        cands = [
+            ({"doc_id": i, "text": f"d{i}"}, score)
+            for i, score in enumerate([0.4, 0.3, 1.0, 0.9, 0.8, 0.7])
+        ]
+        embs = np.eye(6, dtype=np.float32)
+        monkeypatch.setattr(
+            clustering_module, "_cluster",
+            lambda *args, **kwargs: np.array([0, 0, 2, 2, 1, 1]),
+        )
+        result = cluster_rerank("q", cands, 5, _make_embed_fn(embs), n_clusters=3)
+        assert [doc["doc_id"] for doc, _ in result] == [2, 4, 0, 3, 5]
+
+    def test_unsorted_candidates_rank_members_by_relevance(self, monkeypatch):
+        cands = [
+            ({"doc_id": i, "text": f"d{i}"}, score)
+            for i, score in enumerate([0.1, 0.2, 1.0, 0.9])
+        ]
+        embs = np.eye(4, dtype=np.float32)
+        monkeypatch.setattr(
+            clustering_module, "_cluster",
+            lambda *args, **kwargs: np.array([0, 1, 0, 1]),
+        )
+        result = cluster_rerank("q", cands, 4, _make_embed_fn(embs), n_clusters=2)
+        assert [doc["doc_id"] for doc, _ in result] == [2, 3, 0, 1]
+
+    @pytest.mark.parametrize("method", ["kmeans", "agglomerative"])
+    def test_obvious_fixed_clusters(self, method):
+        embeddings = np.array([
+            [1.0, 0.0], [0.99, 0.1],
+            [-1.0, 0.0], [-0.99, -0.1],
+            [0.0, 1.0], [0.1, 0.99],
+        ])
+        embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+        labels = _cluster(embeddings, n_clusters=3, method=method, seed=42)
+        assert labels[0] == labels[1]
+        assert labels[2] == labels[3]
+        assert labels[4] == labels[5]
+        assert len({labels[0], labels[2], labels[4]}) == 3
+
+    def test_kmeans_same_seed_is_reproducible(self, candidates_12):
+        cands, embs = candidates_12
+        first = cluster_rerank("q", cands, 5, _make_embed_fn(embs), n_clusters=3, seed=17)
+        second = cluster_rerank("q", cands, 5, _make_embed_fn(embs), n_clusters=3, seed=17)
+        assert [doc["doc_id"] for doc, _ in first] == [doc["doc_id"] for doc, _ in second]
+
+    def test_kmeans_parameters_are_explicit(self, monkeypatch):
+        captured = {}
+
+        class FakeKMeans:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def fit_predict(self, embeddings):
+                return np.array([0, 1])
+
+        monkeypatch.setattr("sklearn.cluster.KMeans", FakeKMeans)
+        _cluster(np.eye(2), 2, "kmeans", seed=17)
+        assert captured == {
+            "n_clusters": 2, "init": "k-means++", "n_init": 1,
+            "random_state": 17, "algorithm": "lloyd", "max_iter": 300,
+            "tol": 1e-4,
+        }
+
+    def test_agglomerative_parameters_are_explicit(self, monkeypatch):
+        captured = {}
+
+        class FakeAgglomerative:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def fit_predict(self, embeddings):
+                return np.array([0, 1])
+
+        monkeypatch.setattr("sklearn.cluster.AgglomerativeClustering", FakeAgglomerative)
+        _cluster(np.eye(2), 2, "agglomerative", seed=42)
+        assert captured["metric"] == "euclidean"
+        assert captured["linkage"] == "ward"
+
+    @pytest.mark.parametrize("n_clusters", [0, -1, 1.5, True])
+    def test_invalid_cluster_count_raises(self, candidates_12, n_clusters):
+        cands, embs = candidates_12
+        with pytest.raises(ValueError, match="n_clusters"):
+            cluster_rerank("q", cands, 4, _make_embed_fn(embs), n_clusters=n_clusters)
+
+    def test_cluster_count_above_candidates_raises(self, candidates_12):
+        cands, embs = candidates_12
+        with pytest.raises(ValueError, match="cannot exceed"):
+            cluster_rerank("q", cands[:2], 2, _make_embed_fn(embs[:2]), n_clusters=3)
+
+    @pytest.mark.parametrize("top_k", [-1, 1.5, True])
+    def test_invalid_top_k_raises(self, candidates_12, top_k):
+        cands, embs = candidates_12
+        with pytest.raises(ValueError, match="top_k"):
+            cluster_rerank("q", cands, top_k, _make_embed_fn(embs), n_clusters=3)
+
+    def test_top_k_zero_returns_empty_without_embedding_call(self, candidates_12):
+        cands, _ = candidates_12
+        result = cluster_rerank(
+            "q", cands, 0,
+            lambda texts: pytest.fail("embedding function should not be called"),
+            n_clusters=3,
+        )
+        assert result == []
+
+    @pytest.mark.parametrize("score", [np.nan, np.inf, -np.inf])
+    def test_nonfinite_relevance_raises(self, candidates_12, score):
+        cands, embs = candidates_12
+        bad = list(cands[:3])
+        bad[1] = (bad[1][0], score)
+        with pytest.raises(ValueError, match="relevance scores"):
+            cluster_rerank("q", bad, 2, _make_embed_fn(embs[:3]), n_clusters=2)
+
+    @pytest.mark.parametrize("embeddings,error", [
+        (np.array([1.0, 2.0]), "2-D"),
+        (np.ones((2, 2)), "one row per candidate"),
+        (np.empty((3, 0)), "positive feature dimension"),
+        (np.array([[1.0, 0.0], [np.nan, 1.0], [0.0, 1.0]]), "finite"),
+        (np.array([[1.0, 0.0], [np.inf, 1.0], [0.0, 1.0]]), "finite"),
+        (np.array([[1.0, 0.0], [0.0, 0.0], [0.0, 1.0]]), "nonzero row norms"),
+    ])
+    def test_invalid_embeddings_raise(self, candidates_12, embeddings, error):
+        cands, _ = candidates_12
+        with pytest.raises(ValueError, match=error):
+            cluster_rerank("q", cands[:3], 2, lambda texts: embeddings, n_clusters=2)
+
+    def test_missing_precomputed_id_raises(self, candidates_12):
+        cands, embs = candidates_12
+        precomputed = {0: embs[0], 1: embs[1]}
+        with pytest.raises(KeyError, match="missing from precomputed_embs"):
+            cluster_rerank(
+                "q", cands[:3], 2, lambda texts: None,
+                precomputed_embs=precomputed, n_clusters=2,
+            )
+
+    def test_effective_cluster_collapse_raises(self):
+        from sklearn.exceptions import ConvergenceWarning
+
+        cands = [({"doc_id": i, "text": f"d{i}"}, 3 - i) for i in range(3)]
+        embeddings = np.ones((3, 2), dtype=np.float32)
+        with pytest.warns(ConvergenceWarning):
+            with pytest.raises(RuntimeError, match="effective clusters"):
+                cluster_rerank("q", cands, 2, lambda texts: embeddings, n_clusters=2)
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +626,11 @@ class TestParseCondition:
         assert family == "agglo"
         assert kwargs["n_clusters"] == 3
         assert kwargs["method"] == "agglomerative"
+
+    @pytest.mark.parametrize("condition", ["kmeans_k0", "agglo_k0"])
+    def test_zero_cluster_condition_raises(self, condition):
+        with pytest.raises(ValueError, match="at least 1"):
+            parse_condition(condition)
 
     def test_dpp_map(self):
         family, kwargs = parse_condition("dpp_map")

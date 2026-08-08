@@ -50,9 +50,15 @@ def parse_condition(condition: str) -> Tuple[str, Dict[str, Any]]:
                 raise ValueError("MMR lambda must be in [0, 1]")
             return "mmr", {"lambda_param": lambda_param}
         if family == "kmeans":
-            return "kmeans", {"n_clusters": int(m.group(1)), "method": "kmeans"}
+            n_clusters = int(m.group(1))
+            if n_clusters < 1:
+                raise ValueError("KMeans cluster count must be at least 1")
+            return "kmeans", {"n_clusters": n_clusters, "method": "kmeans"}
         if family == "agglo":
-            return "agglo", {"n_clusters": int(m.group(1)), "method": "agglomerative"}
+            n_clusters = int(m.group(1))
+            if n_clusters < 1:
+                raise ValueError("Agglomerative cluster count must be at least 1")
+            return "agglo", {"n_clusters": n_clusters, "method": "agglomerative"}
         if family == "dpp_map":
             return "dpp_map", {"mode": "map"}
         if family == "dpp_sample":
