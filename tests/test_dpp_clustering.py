@@ -111,6 +111,106 @@ class TestPrepare:
         S = cosine_similarity_matrix(embs)
         np.testing.assert_allclose(np.diag(S), np.ones(12), atol=1e-5)
 
+    @pytest.mark.parametrize("score", [np.nan, np.inf, -np.inf, "not-a-score"])
+    def test_invalid_relevance_scores_raise(self, score):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 1.0), (docs[1], score)]
+        with pytest.raises(ValueError, match="relevance scores"):
+            prepare_candidates(candidates, lambda texts: np.eye(2))
+
+    @pytest.mark.parametrize("score", [True, False, np.bool_(True)])
+    def test_boolean_relevance_scores_raise(self, score):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 1.0), (docs[1], score)]
+        with pytest.raises(ValueError, match="real numeric"):
+            prepare_candidates(candidates, lambda texts: np.eye(2))
+
+    @pytest.mark.parametrize("embeddings,error", [
+        (np.array([[1.0, 0.0], [np.nan, 1.0]]), "finite"),
+        (np.array([[1.0, 0.0], [np.inf, 1.0]]), "finite"),
+        (np.array([[1.0, 0.0], [0.0, 0.0]]), "nonzero row norms"),
+        (np.array([1.0, 2.0]), "2-D"),
+        (np.ones((1, 2)), "one row per candidate"),
+        (np.empty((2, 0)), "positive feature dimension"),
+        (np.array([["a", "b"], ["c", "d"]]), "numeric"),
+    ])
+    def test_invalid_embeddings_raise(self, embeddings, error):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 1.0), (docs[1], 0.0)]
+        with pytest.raises(ValueError, match=error):
+            prepare_candidates(candidates, lambda texts: embeddings)
+
+    def test_on_demand_complex_embeddings_raise(self):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 1.0), (docs[1], 0.0)]
+        embeddings = np.array([[1.0 + 1.0j, 0.0], [0.0, 1.0 - 1.0j]])
+        with pytest.raises(ValueError, match="real-valued"):
+            prepare_candidates(candidates, lambda texts: embeddings)
+
+    def test_precomputed_complex_embeddings_raise(self):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 1.0), (docs[1], 0.0)]
+        precomputed = {
+            0: np.array([1.0 + 1.0j, 0.0]),
+            1: np.array([0.0, 1.0 - 1.0j]),
+        }
+        with pytest.raises(ValueError, match="real-valued"):
+            prepare_candidates(candidates, lambda texts: None, precomputed)
+
+    def test_missing_precomputed_id_raises(self):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 1.0), (docs[1], 0.0)]
+        with pytest.raises(KeyError, match="missing from precomputed_embs"):
+            prepare_candidates(
+                candidates, lambda texts: pytest.fail("must not fall back"),
+                precomputed_embs={0: np.array([1.0, 0.0])},
+            )
+
+    def test_valid_negative_relevance_scores(self):
+        docs = [{"doc_id": i, "text": str(i)} for i in range(3)]
+        candidates = list(zip(docs, [-5.0, -3.0, -1.0]))
+        _, norm_scores, _ = prepare_candidates(candidates, lambda texts: np.eye(3))
+        np.testing.assert_array_equal(norm_scores, np.array([0.0, 0.5, 1.0]))
+
+    def test_valid_precomputed_embeddings(self):
+        docs = [{"doc_id": 10, "text": "a"}, {"doc_id": 11, "text": "b"}]
+        candidates = [(docs[0], 2.0), (docs[1], 1.0)]
+        precomputed = {
+            10: np.array([3.0, 4.0]),
+            11: np.array([0.0, 2.0]),
+        }
+        returned_docs, scores, embeddings = prepare_candidates(
+            candidates, lambda texts: pytest.fail("must not call embed_fn"), precomputed
+        )
+        assert returned_docs == docs
+        np.testing.assert_array_equal(scores, np.array([1.0, 0.0]))
+        np.testing.assert_allclose(embeddings, np.array([[0.6, 0.8], [0.0, 1.0]]))
+
+    def test_valid_on_demand_output_regression(self):
+        docs = [{"doc_id": i, "text": str(i)} for i in range(3)]
+        candidates = list(zip(docs, [-2.0, 0.0, 2.0]))
+        raw_embeddings = np.array([[3.0, 4.0], [0.0, 2.0], [-5.0, 0.0]])
+        returned_docs, scores, embeddings = prepare_candidates(
+            candidates, lambda texts: raw_embeddings
+        )
+        assert returned_docs == docs
+        np.testing.assert_array_equal(scores, np.array([0.0, 0.5, 1.0]))
+        np.testing.assert_allclose(
+            embeddings, np.array([[0.6, 0.8], [0.0, 1.0], [-1.0, 0.0]])
+        )
+        np.testing.assert_allclose(np.linalg.norm(embeddings, axis=1), np.ones(3))
+
+    @pytest.mark.parametrize("dtype", [np.int64, np.float64])
+    def test_real_integer_and_float_embeddings_remain_valid(self, dtype):
+        docs = [{"doc_id": 0, "text": "a"}, {"doc_id": 1, "text": "b"}]
+        candidates = [(docs[0], 2), (docs[1], 1.0)]
+        raw_embeddings = np.array([[3, 4], [0, 2]], dtype=dtype)
+        _, scores, embeddings = prepare_candidates(
+            candidates, lambda texts: raw_embeddings
+        )
+        np.testing.assert_array_equal(scores, np.array([1.0, 0.0]))
+        np.testing.assert_allclose(embeddings, np.array([[0.6, 0.8], [0.0, 1.0]]))
+
 
 # ---------------------------------------------------------------------------
 # build_dpp_kernel tests
