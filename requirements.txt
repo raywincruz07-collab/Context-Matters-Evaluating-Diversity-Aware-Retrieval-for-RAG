@@ -14,7 +14,10 @@ transformers
 accelerate
 
 # ColBERTv2
-ragatouille>=0.0.8
+# Pin pre-0.0.10 to retain the Stanford ColBERT backend used by this project.
+ragatouille==0.0.9.post2
+# Compatibility constraint: RAGatouille 0.0.9.post2 imports legacy LangChain retriever APIs.
+langchain==0.3.25
 
 # LLM / API calls
 requests>=2.31.0
