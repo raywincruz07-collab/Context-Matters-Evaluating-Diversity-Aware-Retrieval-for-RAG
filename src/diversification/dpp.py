@@ -7,8 +7,8 @@ Kernel:  L = Diag(q) · S · Diag(q)
 
 Two modes
 ---------
-map    — greedy MAP selection (deterministic, no RNG required).
-         At each step add the item that maximises the log-determinant increment.
+map    — deterministic forward-greedy approximation to fixed-cardinality
+         determinant maximisation.  No RNG required.
 sample — exact k-DPP sample via eigendecomposition.  Requires seed != None.
 
 Reference: Kulesza & Taskar (2012), "Determinantal Point Processes for Machine Learning".
@@ -50,10 +50,9 @@ def build_dpp_kernel(
 
 def _greedy_map(L: np.ndarray, k: int) -> List[int]:
     """
-    Greedy MAP: iteratively select the item maximising the log-det increment.
+    Forward-greedy approximation to fixed-cardinality determinant maximisation.
 
     Uses the Cholesky update trick for O(nk^2) complexity.
-    Falls back to brute-force det ratio when Cholesky becomes unstable.
     """
     n = L.shape[0]
     k = min(k, n)
@@ -67,10 +66,16 @@ def _greedy_map(L: np.ndarray, k: int) -> List[int]:
     V = np.zeros((n, k), dtype=np.float64)
 
     for step in range(k):
-        # Score = diagonal of current Schur complement = gain in log-det
+        # D[i] is the Schur-complement determinant ratio (conditional
+        # variance); log(D[i]) is the log-det increment when D[i] > 0.
+        # Maximising either quantity selects the same candidate.
         scores = D[remaining]
         best_local = int(np.argmax(scores))
         best_i = remaining[best_local]
+        e_i = D[best_i]
+        if not np.isfinite(e_i) or e_i <= 0:
+            raise RuntimeError("greedy DPP encountered a nonpositive or nonfinite pivot")
+
         selected.append(best_i)
         remaining.remove(best_i)
 
@@ -78,9 +83,6 @@ def _greedy_map(L: np.ndarray, k: int) -> List[int]:
             break
 
         # Update Schur complement diagonal for remaining items
-        e_i = D[best_i]
-        if e_i <= 0:
-            break
         v = (L[remaining, best_i] - V[remaining, :step] @ V[best_i, :step]) / np.sqrt(e_i)
         V[remaining, step] = v
         D[remaining] -= v ** 2
@@ -217,7 +219,7 @@ def dpp_rerank(
     seed: Optional[int] = None,
 ) -> List[Tuple[Dict, float]]:
     """
-    Rerank candidates using a k-DPP.
+    Rerank candidates using a DPP L-kernel.
 
     Args:
         query:           Query string (unused directly; kept for interface symmetry).
@@ -226,7 +228,9 @@ def dpp_rerank(
         embed_fn:        Callable(texts) -> np.ndarray [n, dim].
         precomputed_embs: Optional {doc_id -> embedding}.
         theta:           Quality temperature for the DPP kernel.
-        mode:            "map" (deterministic greedy) or "sample" (exact k-DPP).
+        mode:            "map" (deterministic forward-greedy approximation to
+                         fixed-cardinality determinant maximisation) or
+                         "sample" (exact k-DPP).
         seed:            Required when mode="sample"; ignored for mode="map".
 
     Returns:
@@ -251,14 +255,8 @@ def dpp_rerank(
         rng = np.random.default_rng(seed)
         selected = _sample_kdpp(L, top_k, rng)
 
-    # Greedy MAP may stop early on a numerically singular Schur complement.
-    if mode == "map" and len(selected) < top_k:
-        used = set(selected)
-        extras = sorted(
-            [i for i in range(len(docs)) if i not in used],
-            key=lambda i: -norm_scores[i],
-        )
-        selected = selected + extras[: top_k - len(selected)]
+    if mode == "map" and len(selected) != top_k:
+        raise RuntimeError("greedy DPP returned the wrong cardinality")
     elif mode == "sample" and len(selected) != top_k:
         raise RuntimeError("exact k-DPP sampler returned the wrong cardinality")
 

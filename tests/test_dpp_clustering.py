@@ -16,7 +16,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from diversification._common import cosine_similarity_matrix, prepare_candidates
-from diversification.dpp import _sample_kdpp, build_dpp_kernel, dpp_rerank
+import diversification.dpp as dpp_module
+from diversification.dpp import _greedy_map, _sample_kdpp, build_dpp_kernel, dpp_rerank
 from diversification.clustering import cluster_rerank
 from diversification.dispatch import is_diversified, parse_condition, rerank
 
@@ -133,6 +134,69 @@ class TestDPPKernel:
         L = build_dpp_kernel(norm_scores, embeddings)
         eigenvalues = np.linalg.eigvalsh(L)
         assert float(eigenvalues.min()) >= -1e-6
+
+
+# ---------------------------------------------------------------------------
+# deterministic forward-greedy DPP tests
+# ---------------------------------------------------------------------------
+
+class TestGreedyMap:
+    @staticmethod
+    def _direct_greedy_reference(L, k):
+        selected = []
+        remaining = list(range(len(L)))
+        for _ in range(k):
+            log_determinants = []
+            for candidate in remaining:
+                subset = selected + [candidate]
+                sign, log_determinant = np.linalg.slogdet(L[np.ix_(subset, subset)])
+                assert sign > 0
+                log_determinants.append(log_determinant)
+            best_local = int(np.argmax(log_determinants))
+            selected.append(remaining.pop(best_local))
+        return selected
+
+    @pytest.mark.parametrize("L,k", [
+        (np.diag([4.0, 3.0, 2.0, 1.0]), 3),
+        (
+            np.array([
+                [1.0, 0.2, 0.1],
+                [0.2, 1.3, 0.4],
+                [0.1, 0.4, 0.9],
+            ]),
+            3,
+        ),
+    ])
+    def test_matches_direct_stepwise_determinant_greedy(self, L, k):
+        assert _greedy_map(L, k) == self._direct_greedy_reference(L, k)
+
+    def test_greedy_is_not_global_map(self):
+        B = np.array([
+            [0.751939396, -0.658760320, -1.228674986],
+            [0.257557768, 0.312902918, -0.130811690],
+            [1.269983120, -0.092962458, -0.066150889],
+            [-1.108214467, 0.135956851, 1.347077764],
+        ])
+        L = B @ B.T + 0.05 * np.eye(4)
+        greedy_set = set(_greedy_map(L, 2))
+        subsets = list(combinations(range(4), 2))
+        determinants = {
+            subset: float(np.linalg.det(L[np.ix_(subset, subset)]))
+            for subset in subsets
+        }
+        global_optimum = max(subsets, key=determinants.get)
+
+        assert greedy_set == {2, 3}
+        assert set(global_optimum) == {0, 2}
+        assert determinants[global_optimum] > determinants[tuple(sorted(greedy_set))]
+
+    @pytest.mark.parametrize("L,k", [
+        (np.zeros((3, 3)), 2),
+        (np.diag([2.0, 0.0, 0.0]), 2),
+    ])
+    def test_nonpositive_pivot_raises(self, L, k):
+        with pytest.raises(RuntimeError, match="nonpositive or nonfinite pivot"):
+            _greedy_map(L, k)
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +334,14 @@ class TestDPPRerank:
         ids2 = [d["doc_id"] for d, _ in r2]
         assert ids1 == ids2
 
+    def test_map_short_result_raises_without_padding(self, candidates_12, monkeypatch):
+        cands, embs = candidates_12
+        monkeypatch.setattr(dpp_module, "_greedy_map", lambda L, k: [0])
+        with pytest.raises(RuntimeError, match="wrong cardinality"):
+            dpp_rerank(
+                "q", cands, top_k=4, embed_fn=_make_embed_fn(embs), mode="map"
+            )
+
     def test_sample_requires_seed(self, candidates_12):
         cands, embs = candidates_12
         with pytest.raises(ValueError, match="seed"):
@@ -284,12 +356,12 @@ class TestDPPRerank:
         assert ids1 == ids2
 
     def test_map_promotes_diversity(self, candidates_12):
-        """MAP should not return all 4 results from cluster A (indices 0-3)."""
+        """Greedy DPP should not return all 4 results from cluster A."""
         cands, embs = candidates_12
         result = dpp_rerank("q", cands, top_k=4, embed_fn=_make_embed_fn(embs), mode="map")
         ids = {d["doc_id"] for d, _ in result}
         cluster_a = {0, 1, 2, 3}
-        assert ids != cluster_a, "DPP MAP returned all items from one cluster — no diversity"
+        assert ids != cluster_a, "Greedy DPP returned all items from one cluster"
 
     def test_empty_candidates(self):
         result = dpp_rerank("q", [], top_k=4, embed_fn=lambda t: np.zeros((0, 8)))
