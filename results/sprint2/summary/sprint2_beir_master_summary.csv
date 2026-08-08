@@ -1,25 +1,61 @@
-retriever,condition,num_questions,avg_recall_at_k,avg_mrr,avg_retrieval_diversity,avg_faithfulness_nli,predictions_with_content,error_count
-bm25,mmr_0.0,500,0.443,0.8399,0.7391773202419281,0.3555427166321315,500,0
-bm25,mmr_0.25,500,0.554,0.8596666666666666,0.7146858234405518,0.3916696535074152,500,0
-bm25,mmr_0.5,500,0.631,0.8610333333333333,0.6790430945754051,0.42286075655929745,500,0
-bm25,mmr_0.75,500,0.657,0.8602333333333333,0.6575377875566483,0.4607052315946203,500,0
-bm25,mmr_1.0,500,0.667,0.8589,0.6453798372745514,0.4599556782064028,500,0
-bm25,none,500,0.667,0.8589,0.6453798372745514,0.4575380011277739,500,0
-colbertv2,mmr_0.0,500,0.515,0.982,0.735993649482727,0.42760672414302825,500,0
-colbertv2,mmr_0.25,500,0.719,0.9857333333333334,0.7156428447961807,0.5458458298435435,500,0
-colbertv2,mmr_0.5,500,0.831,0.9856333333333333,0.6743876904845237,0.589204151998274,500,0
-colbertv2,mmr_0.75,500,0.857,0.9862000000000001,0.6482608766555786,0.5681321396376007,500,0
-colbertv2,mmr_1.0,500,0.861,0.9861333333333333,0.6353329545259476,0.5907768071832834,500,0
-colbertv2,none,500,0.861,0.9861333333333333,0.6353329545259476,0.5938501209022943,500,0
-contriever,mmr_0.0,500,0.485,0.8657666666666667,0.6902252306938171,0.3386919297147542,500,0
-contriever,mmr_0.25,500,0.634,0.8895,0.6651856671571732,0.4396109171335993,500,0
-contriever,mmr_0.5,500,0.724,0.8899666666666667,0.6288796785473824,0.4727424453604035,500,0
-contriever,mmr_0.75,500,0.726,0.8883,0.6079403030276298,0.5029474499635398,500,0
-contriever,mmr_1.0,500,0.725,0.8876,0.5969822595119476,0.4942009887988679,500,0
-contriever,none,500,0.725,0.8876,0.5969822595119476,0.4740741491545923,500,0
-dpr,mmr_0.0,500,0.397,0.7497333333333334,0.7357934346199035,0.3237859224621207,500,0
-dpr,mmr_0.25,500,0.525,0.7728,0.7019159445762634,0.38105876856483517,500,0
-dpr,mmr_0.5,500,0.618,0.7825666666666666,0.6627535626888276,0.40397960840840824,500,0
-dpr,mmr_0.75,500,0.639,0.7835333333333333,0.6494114395976066,0.4290522316017887,500,0
-dpr,mmr_1.0,500,0.648,0.7846000000000001,0.6405515322089195,0.433802067244309,500,0
-dpr,none,500,0.648,0.7846000000000001,0.6405515322089195,0.4449299966242397,500,0
+retriever,condition,family,n_questions,n_errors,avg_recall_at_5,avg_mrr,avg_retrieval_diversity,avg_faithfulness_nli,recall_delta_vs_baseline,mrr_delta_vs_baseline,diversity_delta_vs_baseline,diversity_gained_per_recall_lost,efficiency_ranking_eligible,rank_by_recall_within_retriever,rank_by_efficiency_within_retriever,is_best_recall_for_retriever,is_most_efficient_diversification_for_retriever,has_generation,generator_model,generator_temperature,generator_max_tokens,top_k,candidate_pool_size,corpus_size,seed,exact_match,f1,rouge_l
+bm25,mmr_1.0,MMR,500,0,0.667,0.8589,0.6454,0.46,0.0,0.0,0.0,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,none,MMR,500,0,0.667,0.8589,0.6454,0.4575,0.0,0.0,0.0,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,mmr_0.75,MMR,500,0,0.657,0.8602,0.6575,0.4607,-0.01,0.0013,0.0121,1.21,False,3,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,kmeans_k2,Clustering,500,0,0.647,0.6878,0.6627,,-0.02,-0.1711,0.0173,0.865,False,4,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,mmr_0.5,MMR,500,0,0.631,0.861,0.679,0.4229,-0.036,0.0021,0.0336,0.9333,True,5,2.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,dpp_map,DPP,500,0,0.63,0.8627,0.6879,0.4493,-0.037,0.0038,0.0425,1.1486,True,6,1.0,False,True,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,agglo_k3,Clustering,500,0,0.605,0.581,0.6709,,-0.062,-0.2779,0.0255,0.4113,False,7,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,mmr_0.25,MMR,500,0,0.554,0.8597,0.7147,0.3917,-0.113,0.0008,0.0693,0.6133,True,8,3.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,kmeans_k3,Clustering,500,0,0.553,0.4625,0.6741,0.3698,-0.114,-0.3964,0.0287,0.2518,False,9,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,kmeans_k5,Clustering,500,0,0.516,0.3426,0.6894,,-0.151,-0.5163,0.044,0.2914,True,10,6.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,agglo_k5,Clustering,500,0,0.505,0.4522,0.6951,,-0.162,-0.4067,0.0497,0.3068,True,11,5.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,mmr_0.0,MMR,500,0,0.443,0.8399,0.7392,0.3555,-0.224,-0.019,0.0938,0.4187,True,12,4.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,dpp_seed2,DPP,500,0,0.366,0.3659,0.6764,,-0.301,-0.493,0.031,0.103,True,13,7.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,dpp_seed3,DPP,500,0,0.285,0.4681,0.6675,,-0.382,-0.3908,0.0221,0.0579,False,14,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+bm25,dpp_seed1,DPP,500,0,0.166,0.1464,0.6784,,-0.501,-0.7125,0.033,0.0659,True,15,8.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,mmr_1.0,MMR,500,0,0.861,0.9861,0.6353,0.5908,0.0,0.0,0.0,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,none,MMR,500,0,0.861,0.9861,0.6353,0.5939,0.0,0.0,0.0,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,mmr_0.75,MMR,500,0,0.857,0.9862,0.6483,0.5681,-0.004,0.0001,0.013,3.25,False,3,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,kmeans_k2,Clustering,500,0,0.845,0.7997,0.6494,,-0.016,-0.1864,0.0141,0.8812,False,4,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,mmr_0.5,MMR,500,0,0.831,0.9856,0.6744,0.5892,-0.03,-0.0005,0.0391,1.3033,True,5,2.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,dpp_map,DPP,500,0,0.829,0.9857,0.6847,0.5931,-0.032,-0.0004,0.0494,1.5437,True,6,1.0,False,True,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,agglo_k3,Clustering,500,0,0.809,0.7248,0.6655,,-0.052,-0.2613,0.0302,0.5808,True,7,3.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,mmr_0.25,MMR,500,0,0.719,0.9857,0.7156,0.5458,-0.142,-0.0004,0.0803,0.5655,True,8,4.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,kmeans_k3,Clustering,500,0,0.691,0.5142,0.6651,0.5073,-0.17,-0.4719,0.0298,0.1753,False,9,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,agglo_k5,Clustering,500,0,0.675,0.562,0.6916,,-0.186,-0.4241,0.0563,0.3027,True,10,5.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,kmeans_k5,Clustering,500,0,0.667,0.387,0.6804,,-0.194,-0.5991,0.0451,0.2325,True,11,7.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,mmr_0.0,MMR,500,0,0.515,0.982,0.736,0.4276,-0.346,-0.0041,0.1007,0.291,True,12,6.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,dpp_seed2,DPP,500,0,0.476,0.4697,0.6763,,-0.385,-0.5164,0.041,0.1065,True,13,8.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,dpp_seed3,DPP,500,0,0.377,0.262,0.6764,,-0.484,-0.7241,0.0411,0.0849,True,14,9.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+colbertv2,dpp_seed1,DPP,500,0,0.203,0.1661,0.6614,,-0.658,-0.82,0.0261,0.0397,False,15,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,mmr_0.75,MMR,500,0,0.726,0.8883,0.6079,0.5029,0.001,0.0007,0.0109,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,mmr_1.0,MMR,500,0,0.725,0.8876,0.597,0.4942,0.0,0.0,0.0,,False,2,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,none,MMR,500,0,0.725,0.8876,0.597,0.4741,0.0,0.0,0.0,,False,2,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,mmr_0.5,MMR,500,0,0.724,0.89,0.6289,0.4727,-0.001,0.0024,0.0319,31.9,True,4,1.0,False,True,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,dpp_map,DPP,500,0,0.711,0.8911,0.6414,0.4781,-0.014,0.0035,0.0444,3.1714,True,5,2.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,kmeans_k2,Clustering,500,0,0.704,0.7008,0.6176,,-0.021,-0.1868,0.0206,0.981,False,6,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,agglo_k3,Clustering,500,0,0.658,0.654,0.6262,,-0.067,-0.2336,0.0292,0.4358,False,7,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,mmr_0.25,MMR,500,0,0.634,0.8895,0.6652,0.4396,-0.091,0.0019,0.0682,0.7495,True,8,3.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,kmeans_k3,Clustering,500,0,0.58,0.48,0.6273,0.3965,-0.145,-0.4076,0.0303,0.209,True,9,7.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,kmeans_k5,Clustering,500,0,0.571,0.3566,0.6417,,-0.154,-0.531,0.0447,0.2903,True,10,6.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,agglo_k5,Clustering,500,0,0.564,0.5187,0.6471,,-0.161,-0.3689,0.0501,0.3112,True,11,5.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,mmr_0.0,MMR,500,0,0.485,0.8658,0.6902,0.3387,-0.24,-0.0218,0.0932,0.3883,True,12,4.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,dpp_seed2,DPP,500,0,0.466,0.3545,0.6376,,-0.259,-0.5331,0.0406,0.1568,True,13,8.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,dpp_seed3,DPP,500,0,0.284,0.1944,0.638,,-0.441,-0.6932,0.041,0.093,True,14,9.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+contriever,dpp_seed1,DPP,500,0,0.175,0.1437,0.6212,,-0.55,-0.7439,0.0242,0.044,False,15,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,mmr_1.0,MMR,500,0,0.648,0.7846,0.6406,0.4338,0.0,0.0,0.0,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,none,MMR,500,0,0.648,0.7846,0.6406,0.4449,0.0,0.0,0.0,,False,1,,True,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,mmr_0.75,MMR,500,0,0.639,0.7835,0.6494,0.4291,-0.009,-0.0011,0.0088,0.9778,False,3,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,kmeans_k2,Clustering,500,0,0.625,0.611,0.6533,,-0.023,-0.1736,0.0127,0.5522,False,4,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,mmr_0.5,MMR,500,0,0.618,0.7826,0.6628,0.404,-0.03,-0.002,0.0222,0.74,False,5,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,dpp_map,DPP,500,0,0.6,0.7819,0.6745,0.4061,-0.048,-0.0027,0.0339,0.7062,True,6,1.0,False,True,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,agglo_k3,Clustering,500,0,0.582,0.5587,0.6699,,-0.066,-0.2259,0.0293,0.4439,False,7,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,mmr_0.25,MMR,500,0,0.525,0.7728,0.7019,0.3811,-0.123,-0.0118,0.0613,0.4984,True,8,2.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,kmeans_k3,Clustering,500,0,0.52,0.4006,0.6668,0.3726,-0.128,-0.384,0.0262,0.2047,False,9,,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,agglo_k5,Clustering,500,0,0.489,0.407,0.6925,,-0.159,-0.3776,0.0519,0.3264,True,10,4.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,kmeans_k5,Clustering,500,0,0.488,0.3162,0.6822,,-0.16,-0.4684,0.0416,0.26,True,11,5.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,dpp_seed2,DPP,500,0,0.399,0.3361,0.6745,,-0.249,-0.4485,0.0339,0.1361,True,12,6.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,mmr_0.0,MMR,500,0,0.397,0.7497,0.7358,0.3238,-0.251,-0.0349,0.0952,0.3793,True,13,3.0,False,False,True,qwen3.5-122b,0.0,512.0,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,dpp_seed3,DPP,500,0,0.278,0.2013,0.6732,,-0.37,-0.5833,0.0326,0.0881,True,14,7.0,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)
+dpr,dpp_seed1,DPP,500,0,0.144,0.1155,0.6587,,-0.504,-0.6691,0.0181,0.0359,False,15,,False,False,False,,,,5,20,25997,42,N/A (BEIR has no ref answers),N/A (BEIR has no ref answers),N/A (BEIR has no ref answers)

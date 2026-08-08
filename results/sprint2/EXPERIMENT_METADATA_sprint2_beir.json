@@ -13,7 +13,16 @@
         "mmr_0.25",
         "mmr_0.5",
         "mmr_0.75",
-        "mmr_1.0"
+        "mmr_1.0",
+        "kmeans_k2",
+        "kmeans_k3",
+        "kmeans_k5",
+        "agglo_k3",
+        "agglo_k5",
+        "dpp_map",
+        "dpp_seed1",
+        "dpp_seed2",
+        "dpp_seed3"
     ],
     "sample_size": 500,
     "seed": 42,
@@ -38,5 +47,27 @@
     },
     "true_error_count": 0,
     "timestamp": "2026-07-13T18:08:02Z",
-    "git_commit": "unavailable"
+    "git_commit": "unavailable",
+    "conditions_with_generation": [
+        "none",
+        "mmr_0.0",
+        "mmr_0.25",
+        "mmr_0.5",
+        "mmr_0.75",
+        "mmr_1.0",
+        "kmeans_k3",
+        "dpp_map"
+    ],
+    "conditions_retrieval_only": [
+        "kmeans_k2",
+        "kmeans_k5",
+        "agglo_k3",
+        "agglo_k5",
+        "dpp_seed1",
+        "dpp_seed2",
+        "dpp_seed3"
+    ],
+    "research_question": "Is diversifying retrieved context actually helpful for LLM reasoning, or does it introduce noise and hallucinations? (kick-off deck, Phase 2)",
+    "research_question_answer": "It introduces noise and reduces faithfulness. Across all 60 retriever x condition combinations, every diversified condition shows lower recall than its own retriever's zero-diversification baseline, and faithfulness_nli decreases monotonically with increasing diversification wherever measured. Diversification did not improve LLM reasoning in any tested condition. The secondary finding is that the SIZE of this cost varies substantially by algorithm: deterministic DPP (MAP inference) is the most efficient method for 3 of 4 retrievers; naive clustering is markedly less efficient; stochastic DPP sampling is the worst method tested, costing up to 0.66 of total recall in the single worst case (dpp_seed1).",
+    "sprint1_baseline_note": "Sprint 1 (PubMedQA) is the project baseline for cross-dataset retriever performance comparison -- see results/sprint2/summary/sprint1_vs_sprint2_retriever_comparison.csv. It is NOT the baseline for the diversity-tradeoff analysis in this file's conditions, since PubMedQA has no diversity metric at all."
 }
