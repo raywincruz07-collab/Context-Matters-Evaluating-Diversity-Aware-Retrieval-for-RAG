@@ -19,6 +19,7 @@ reusing ContrieverRetriever._encode from retrievers/dense_retriever.py.
 """
 
 import os
+from numbers import Real
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -55,13 +56,30 @@ def mmr_rerank(
         List of (doc, normalised_relevance_score) of length min(top_k, len(candidates)),
         ordered by MMR selection.
     """
+    if (
+        isinstance(lambda_param, (bool, np.bool_))
+        or not isinstance(lambda_param, Real)
+        or not np.isfinite(lambda_param)
+        or not 0.0 <= lambda_param <= 1.0
+    ):
+        raise ValueError("lambda_param must be a finite real number in [0, 1]")
+    if (
+        isinstance(top_k, (bool, np.bool_))
+        or not isinstance(top_k, (int, np.integer))
+        or top_k < 0
+    ):
+        raise ValueError("top_k must be a nonnegative integer")
+
     if not candidates:
         return []
 
-    top_k = min(top_k, len(candidates))
-
     docs = [doc for doc, _ in candidates]
-    raw_scores = np.array([score for _, score in candidates], dtype=np.float64)
+    try:
+        raw_scores = np.array([score for _, score in candidates], dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate relevance scores must be finite real numbers") from exc
+    if not np.all(np.isfinite(raw_scores)):
+        raise ValueError("candidate relevance scores must be finite real numbers")
 
     # Normalise relevance scores to [0, 1] per query
     score_min, score_max = raw_scores.min(), raw_scores.max()
@@ -70,12 +88,14 @@ def mmr_rerank(
     else:
         norm_scores = np.ones_like(raw_scores)
 
+    top_k = min(top_k, len(candidates))
+    if top_k == 0:
+        return []
+
     # Obtain embeddings for diversity computation
     if precomputed_embs is not None:
         try:
-            embeddings = np.array(
-                [precomputed_embs[doc["doc_id"]] for doc in docs], dtype=np.float32
-            )
+            raw_embeddings = [precomputed_embs[doc["doc_id"]] for doc in docs]
         except KeyError as exc:
             raise KeyError(
                 f"doc_id {exc} missing from precomputed_embs; "
@@ -83,11 +103,28 @@ def mmr_rerank(
             ) from exc
     else:
         texts = [doc.get("text", "") for doc in docs]
-        embeddings = embed_fn(texts).astype(np.float32)
+        raw_embeddings = embed_fn(texts)
+
+    try:
+        embeddings = np.asarray(raw_embeddings)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("candidate embeddings must be a 2-D numeric array") from exc
+    if not np.issubdtype(embeddings.dtype, np.number):
+        raise ValueError("candidate embeddings must be a 2-D numeric array")
+    embeddings = embeddings.astype(np.float32)
+    if embeddings.ndim != 2:
+        raise ValueError("candidate embeddings must be a 2-D numeric array")
+    if embeddings.shape[0] != len(candidates):
+        raise ValueError("candidate embeddings must have one row per candidate")
+    if embeddings.shape[1] == 0:
+        raise ValueError("candidate embeddings must have a positive feature dimension")
+    if not np.all(np.isfinite(embeddings)):
+        raise ValueError("candidate embeddings must contain only finite values")
 
     # Ensure L2-normalised (guard against embed_fn not normalising)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms = np.where(norms > 0, norms, 1.0)
+    if np.any(norms == 0.0):
+        raise ValueError("candidate embeddings must have nonzero row norms")
     embeddings = embeddings / norms
 
     selected_indices: List[int] = []
@@ -95,15 +132,10 @@ def mmr_rerank(
 
     while len(selected_indices) < top_k and remaining_indices:
         if not selected_indices:
-            # No selected docs yet → diversity term is zero for all candidates.
-            # For lambda=0.0 all scores tie at 0; pick index 0 deterministically.
-            # For lambda>0 pick the highest-relevance candidate.
-            if lambda_param == 0.0:
-                best_idx = remaining_indices[0]
-            else:
-                rel_scores = lambda_param * norm_scores[remaining_indices]
-                best_local = int(np.argmax(rel_scores))
-                best_idx = remaining_indices[best_local]
+            # Seed every lambda endpoint with the highest-relevance candidate.
+            # np.argmax gives deterministic first-occurrence tie-breaking.
+            best_local = int(np.argmax(norm_scores[remaining_indices]))
+            best_idx = remaining_indices[best_local]
         else:
             selected_embs = embeddings[selected_indices]  # [n_sel, dim]
             best_score = -float("inf")

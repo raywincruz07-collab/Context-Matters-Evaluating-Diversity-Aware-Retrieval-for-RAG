@@ -45,7 +45,10 @@ def parse_condition(condition: str) -> Tuple[str, Dict[str, Any]]:
         if family == "none":
             return "none", {}
         if family == "mmr":
-            return "mmr", {"lambda_param": float(m.group(1))}
+            lambda_param = float(m.group(1))
+            if not 0.0 <= lambda_param <= 1.0:
+                raise ValueError("MMR lambda must be in [0, 1]")
+            return "mmr", {"lambda_param": lambda_param}
         if family == "kmeans":
             return "kmeans", {"n_clusters": int(m.group(1)), "method": "kmeans"}
         if family == "agglo":

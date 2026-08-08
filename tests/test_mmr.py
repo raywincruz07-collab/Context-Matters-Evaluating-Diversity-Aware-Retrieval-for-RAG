@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from diversification.mmr import mmr_rerank
+from diversification.dispatch import parse_condition
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,15 @@ class TestLambdaOne:
         # First 3 by relevance: 0, 1, 2
         assert [doc["doc_id"] for doc, _ in result] == [0, 1, 2]
 
+    def test_unsorted_negative_scores_follow_relevance(self):
+        candidates = _make_candidates(3, scores=[-5.0, -1.0, -3.0])
+        embs = {f"doc_{i}": np.eye(3, dtype=np.float32)[i] for i in range(3)}
+        result = mmr_rerank(
+            "q", candidates, top_k=3, lambda_param=1.0,
+            embed_fn=_unit_embed_fn(embs),
+        )
+        assert [doc["doc_id"] for doc, _ in result] == [1, 2, 0]
+
 
 # ---------------------------------------------------------------------------
 # lambda=0.0 — pure diversity maximisation
@@ -177,6 +187,41 @@ class TestLambdaZero:
             f"lambda=0.0 full order expected [0,1,2] (A,B,C) got {result_ids}"
         )
 
+    def test_unsorted_candidates_are_relevance_seeded(self):
+        candidates = _make_candidates(3, scores=[0.1, 0.5, 1.0])
+        embs = {
+            "doc_0": np.array([1.0, 0.0]),
+            "doc_1": np.array([0.0, 1.0]),
+            "doc_2": np.array([1.0, 0.0]),
+        }
+        result = mmr_rerank(
+            "q", candidates, top_k=3, lambda_param=0.0,
+            embed_fn=_unit_embed_fn(embs),
+        )
+        assert [doc["doc_id"] for doc, _ in result] == [2, 1, 0]
+
+
+class TestKnownObjective:
+    @pytest.mark.parametrize("lambda_param,expected", [
+        (0.25, [0, 2, 1]),
+        (0.5, [0, 2, 1]),
+        (0.75, [0, 1, 2]),
+    ])
+    def test_hand_calculated_selection(self, lambda_param, expected):
+        # Normalised relevance is exactly [1, 0.5, 0].  After selecting doc 0,
+        # similarities are sim(1, 0)=0.8 and sim(2, 0)=0.
+        candidates = _make_candidates(3, scores=[3.0, 2.0, 1.0])
+        embs = {
+            "doc_0": np.array([1.0, 0.0]),
+            "doc_1": np.array([0.8, 0.6]),
+            "doc_2": np.array([0.0, 1.0]),
+        }
+        result = mmr_rerank(
+            "q", candidates, top_k=3, lambda_param=lambda_param,
+            embed_fn=_unit_embed_fn(embs),
+        )
+        assert [doc["doc_id"] for doc, _ in result] == expected
+
 
 # ---------------------------------------------------------------------------
 # Precomputed embeddings path
@@ -207,6 +252,38 @@ class TestPrecomputedEmbs:
             precomputed_embs=precomputed,
         )
         assert len(result) == 3
+
+    def test_precomputed_and_on_demand_are_equivalent(self):
+        candidates = _make_candidates(3, scores=[0.9, 0.6, 0.2])
+        vectors = {
+            0: np.array([2.0, 0.0], dtype=np.float32),
+            1: np.array([1.0, 1.0], dtype=np.float32),
+            2: np.array([0.0, 3.0], dtype=np.float32),
+        }
+        on_demand = {f"doc_{i}": vectors[i] for i in range(3)}
+        from_fn = mmr_rerank(
+            "q", candidates, 3, 0.5, _unit_embed_fn(on_demand)
+        )
+        from_precomputed = mmr_rerank(
+            "q", candidates, 3, 0.5, lambda texts: None,
+            precomputed_embs=vectors,
+        )
+        assert [doc["doc_id"] for doc, _ in from_fn] == [
+            doc["doc_id"] for doc, _ in from_precomputed
+        ]
+
+    def test_duplicate_candidates_remain_deterministic(self):
+        candidates = _make_candidates(3, scores=[3.0, 2.0, 1.0])
+        candidates[1][0]["doc_id"] = 0
+        precomputed = {
+            0: np.array([1.0, 0.0]),
+            2: np.array([0.0, 1.0]),
+        }
+        result = mmr_rerank(
+            "q", candidates, 3, 0.5, lambda texts: None,
+            precomputed_embs=precomputed,
+        )
+        assert [doc["text"] for doc, _ in result] == ["doc_0", "doc_2", "doc_1"]
 
 
 # ---------------------------------------------------------------------------
@@ -248,3 +325,77 @@ class TestEdgeCases:
         )
         # All norm scores are 1.0 (max==min edge case), tie-break by first argmax = index 0
         assert len(result) == 3
+
+    def test_negative_scores_are_minmax_normalised(self):
+        candidates = _make_candidates(3, scores=[-5.0, -3.0, -1.0])
+        embs = {f"doc_{i}": np.eye(3, dtype=np.float32)[i] for i in range(3)}
+        result = mmr_rerank("q", candidates, 3, 1.0, _unit_embed_fn(embs))
+        assert [score for _, score in result] == [1.0, 0.5, 0.0]
+
+    def test_equal_scores_remain_equal_after_normalisation(self):
+        candidates = _make_candidates(3, scores=[-2.0, -2.0, -2.0])
+        embs = {f"doc_{i}": np.eye(3, dtype=np.float32)[i] for i in range(3)}
+        result = mmr_rerank("q", candidates, 3, 1.0, _unit_embed_fn(embs))
+        assert [score for _, score in result] == [1.0, 1.0, 1.0]
+
+    def test_positive_affine_score_transform_preserves_selection(self):
+        scores = [-4.0, 2.0, 1.0]
+        embs = {f"doc_{i}": np.eye(3, dtype=np.float32)[i] for i in range(3)}
+        original = mmr_rerank(
+            "q", _make_candidates(3, scores), 3, 0.6, _unit_embed_fn(embs)
+        )
+        transformed = mmr_rerank(
+            "q", _make_candidates(3, [3.0 * x + 7.0 for x in scores]),
+            3, 0.6, _unit_embed_fn(embs),
+        )
+        assert [doc["doc_id"] for doc, _ in original] == [
+            doc["doc_id"] for doc, _ in transformed
+        ]
+
+    @pytest.mark.parametrize("score", [np.nan, np.inf, -np.inf])
+    def test_nonfinite_relevance_score_raises(self, score):
+        candidates = _make_candidates(2, scores=[1.0, score])
+        with pytest.raises(ValueError, match="relevance scores"):
+            mmr_rerank("q", candidates, 1, 0.5, lambda texts: np.ones((2, 2)))
+
+    @pytest.mark.parametrize("lambda_param", [-0.1, 1.1, np.nan, np.inf, -np.inf])
+    def test_invalid_lambda_raises(self, lambda_param):
+        with pytest.raises(ValueError, match="lambda_param"):
+            mmr_rerank("q", [], 0, lambda_param, lambda texts: np.empty((0, 1)))
+
+    def test_dispatch_rejects_invalid_lambda(self):
+        with pytest.raises(ValueError, match="MMR lambda"):
+            parse_condition("mmr_1.5")
+
+    @pytest.mark.parametrize("top_k", [-1, 1.5, True])
+    def test_invalid_top_k_raises(self, top_k):
+        with pytest.raises(ValueError, match="top_k"):
+            mmr_rerank("q", [], top_k, 0.5, lambda texts: np.empty((0, 1)))
+
+    def test_top_k_zero_validates_scores_without_embedding_call(self):
+        candidates = _make_candidates(2, scores=[1.0, np.nan])
+        with pytest.raises(ValueError, match="relevance scores"):
+            mmr_rerank(
+                "q", candidates, 0, 0.5,
+                lambda texts: pytest.fail("embedding function should not be called"),
+            )
+
+    def test_top_k_zero_returns_empty_without_embedding_call(self):
+        candidates = _make_candidates(2, scores=[1.0, 0.0])
+        result = mmr_rerank(
+            "q", candidates, 0, 0.5,
+            lambda texts: pytest.fail("embedding function should not be called"),
+        )
+        assert result == []
+
+    @pytest.mark.parametrize("embeddings,error", [
+        (np.array([1.0, 2.0]), "2-D"),
+        (np.ones((1, 2)), "one row per candidate"),
+        (np.empty((2, 0)), "positive feature dimension"),
+        (np.array([[1.0, 0.0], [np.nan, 1.0]]), "finite"),
+        (np.array([[1.0, 0.0], [0.0, 0.0]]), "nonzero row norms"),
+    ])
+    def test_invalid_embeddings_raise(self, embeddings, error):
+        candidates = _make_candidates(2)
+        with pytest.raises(ValueError, match=error):
+            mmr_rerank("q", candidates, 1, 0.5, lambda texts: embeddings)
