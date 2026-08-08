@@ -19,3 +19,6 @@ data/hotpot_qa_pairs.json
 data/hotpotqa_distractor/
 data/hotpot_beir_corpus.json
 data/hotpot_beir_qa_pairs.json
+
+# Local Python virtual environment
+.venv/
