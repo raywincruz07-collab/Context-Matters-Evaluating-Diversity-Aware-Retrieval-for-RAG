@@ -217,7 +217,7 @@ def _definition(
     allowed_context_modes: frozenset[ContextMode] = _BOTH_CONTEXT_MODES,
     requires_generation: bool = False,
     requires_reference: bool = False,
-    requires_evaluator: bool = True,
+    requires_evaluator: bool = False,
     protocol_frozen_datasets: frozenset[DatasetId],
 ) -> MetricDefinition:
     return MetricDefinition(
@@ -254,6 +254,7 @@ METRIC_REGISTRY = MetricRegistry(
             "sprint3.retrieval_diversity.v1",
             MetricScope.RETRIEVAL_ARTIFACT,
             _ALL_DATASETS,
+            requires_evaluator=True,
             protocol_frozen_datasets=_ALL_DATASETS,
         ),
         _definition(
@@ -288,6 +289,7 @@ METRIC_REGISTRY = MetricRegistry(
             _ALL_DATASETS,
             allowed_context_modes=frozenset({ContextMode.WITH_CONTEXT}),
             requires_generation=True,
+            requires_evaluator=True,
             protocol_frozen_datasets=frozenset(),
         ),
         _definition(
@@ -304,6 +306,7 @@ METRIC_REGISTRY = MetricRegistry(
             _ASQA_ONLY,
             requires_generation=True,
             requires_reference=True,
+            requires_evaluator=True,
             protocol_frozen_datasets=frozenset(),
         ),
     ]

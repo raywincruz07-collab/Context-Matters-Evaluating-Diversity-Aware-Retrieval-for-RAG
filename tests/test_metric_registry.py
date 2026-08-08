@@ -227,6 +227,51 @@ def test_unavailable_evaluator_blocks_metric_that_requires_it():
     )
 
 
+@pytest.mark.parametrize(
+    "metric_id",
+    ["recall_at_k", "mrr_at_k", "exact_match", "token_f1", "rouge_l"],
+)
+def test_intrinsic_metrics_do_not_require_external_evaluator(metric_id):
+    decision = METRIC_REGISTRY.decide(
+        metric_id, _context(evaluator_available=False)
+    )
+    assert decision.eligible
+
+
+def test_requires_evaluator_is_explicit_for_every_registered_metric():
+    expected = {
+        "recall_at_k": False,
+        "mrr_at_k": False,
+        "retrieval_diversity": True,
+        "pubmedqa_decision_accuracy": False,
+        "exact_match": False,
+        "token_f1": False,
+        "rouge_l": False,
+        "faithfulness_to_context": True,
+        "asqa_alpha_ndcg": False,
+        "asqa_official_answer": True,
+    }
+    assert {
+        metric_id: definition.requires_evaluator
+        for metric_id, definition in METRIC_REGISTRY.definitions.items()
+    } == expected
+
+
+@pytest.mark.parametrize(
+    "metric_id", ["faithfulness_to_context", "asqa_official_answer"]
+)
+def test_protocol_blocking_precedes_external_evaluator_availability(metric_id):
+    context = _context(evaluator_available=False)
+    if metric_id == "asqa_official_answer":
+        context = _context(
+            dataset_id=DatasetId.ASQA, evaluator_available=False
+        )
+    decision = METRIC_REGISTRY.decide(metric_id, context)
+    _assert_unavailable(
+        decision, MetricStatus.NOT_COMPUTED, ReasonCode.PROTOCOL_NOT_FROZEN
+    )
+
+
 def test_unavailable_reference_blocks_metric_that_requires_it():
     decision = METRIC_REGISTRY.decide(
         "exact_match", _context(reference_available=False)
