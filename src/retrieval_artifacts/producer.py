@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from retrievers.bm25_config import BM25_CONFIG, BM25Config
 from retrieval_artifacts.contracts import (
     CANDIDATE_SCHEMA_VERSION,
     CandidateArtifact,
@@ -24,17 +25,6 @@ from retrieval_artifacts.contracts import (
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-BM25_QUERY_PREPROCESSING = "lowercase then split on whitespace"
-BM25_DOCUMENT_PREPROCESSING = "lowercase then split exact document text on whitespace"
-BM25_NORMALIZATION = "none"
-BM25_SCORE_SEMANTICS = (
-    "rank_bm25.BM25Okapi native get_scores score; BM25Retriever returns "
-    "descending scores and excludes scores <= 0"
-)
-BM25_INDEX_TYPE = "in-memory rank_bm25.BM25Okapi"
-BM25_INDEX_CONFIG = "BM25Okapi constructor defaults from the recorded rank_bm25 version"
-
 
 def _require_stable_id(value: object, name: str) -> None:
     if isinstance(value, str):
@@ -178,34 +168,22 @@ def compute_index_fingerprint_sha256(
     corpus_manifest_sha256: str,
     document_id_map_sha256: str,
     library_version: str,
-    query_preprocessing: str = BM25_QUERY_PREPROCESSING,
-    document_preprocessing: str = BM25_DOCUMENT_PREPROCESSING,
-    normalization: str = BM25_NORMALIZATION,
-    score_semantics: str = BM25_SCORE_SEMANTICS,
-    index_type: str = BM25_INDEX_TYPE,
-    index_config: str = BM25_INDEX_CONFIG,
+    bm25_config: BM25Config = BM25_CONFIG,
 ) -> str:
     """Fingerprint BM25 configuration and its exact corpus binding."""
     _require_sha256(corpus_manifest_sha256, "corpus_manifest_sha256")
     _require_sha256(document_id_map_sha256, "document_id_map_sha256")
-    values = {
-        "document_preprocessing": document_preprocessing,
-        "index_config": index_config,
-        "index_type": index_type,
-        "library_name": "rank_bm25",
-        "library_version": library_version,
-        "normalization": normalization,
-        "query_preprocessing": query_preprocessing,
-        "score_semantics": score_semantics,
-    }
-    for name, value in values.items():
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"{name} must be a non-empty string")
+    if not isinstance(bm25_config, BM25Config):
+        raise TypeError("bm25_config must be BM25Config")
+    if not isinstance(library_version, str) or not library_version.strip():
+        raise ValueError("library_version must be a non-empty string")
     return _canonical_hash(
         {
+            "bm25_config": bm25_config.scientific_payload(),
             "corpus_manifest_sha256": corpus_manifest_sha256,
             "document_id_map_sha256": document_id_map_sha256,
-            "retriever_config": values,
+            "library_name": "rank_bm25",
+            "library_version": library_version,
         }
     )
 
@@ -215,8 +193,11 @@ def build_bm25_retriever_provenance(
     library_version: str,
     index_fingerprint_sha256: str,
     index_artifact_sha256: str | None = None,
+    bm25_config: BM25Config = BM25_CONFIG,
 ) -> RetrieverProvenance:
     """Describe the repository's current BM25Retriever without inspecting runtime."""
+    if not isinstance(bm25_config, BM25Config):
+        raise TypeError("bm25_config must be BM25Config")
     return RetrieverProvenance(
         retriever_name="bm25",
         implementation="retrievers.bm25_retriever.BM25Retriever",
@@ -226,12 +207,12 @@ def build_bm25_retriever_provenance(
         model_revision=None,
         tokenizer_id=None,
         tokenizer_revision=None,
-        query_preprocessing=BM25_QUERY_PREPROCESSING,
-        document_preprocessing=BM25_DOCUMENT_PREPROCESSING,
-        normalization=BM25_NORMALIZATION,
-        score_semantics=BM25_SCORE_SEMANTICS,
-        index_type=BM25_INDEX_TYPE,
-        index_config=BM25_INDEX_CONFIG,
+        query_preprocessing=bm25_config.query_preprocessing,
+        document_preprocessing=bm25_config.document_preprocessing,
+        normalization=bm25_config.normalization,
+        score_semantics=bm25_config.score_semantics,
+        index_type=bm25_config.index_type,
+        index_config=bm25_config.scientific_json(),
         index_fingerprint_sha256=index_fingerprint_sha256,
         index_artifact_sha256=index_artifact_sha256,
     )
@@ -241,17 +222,19 @@ def validate_bm25_index_binding(
     *,
     corpus_provenance: CorpusProvenance,
     retriever_provenance: RetrieverProvenance,
+    bm25_config: BM25Config = BM25_CONFIG,
 ) -> None:
     """Validate declared BM25 configuration-to-corpus fingerprint consistency.
 
-    This validates provenance declarations only. It does not prove that the current
-    ``BM25Retriever`` runtime loaded an index built from this corpus; its existing
-    path-based ``data/indices/bm25_index.pkl`` cache requires separate validation.
+    This validates provenance declarations only. Runtime cache binding is enforced
+    separately by ``BM25Retriever`` and is not the scientific index fingerprint.
     """
     if not isinstance(corpus_provenance, CorpusProvenance):
         raise TypeError("corpus_provenance must be CorpusProvenance")
     if not isinstance(retriever_provenance, RetrieverProvenance):
         raise TypeError("retriever_provenance must be RetrieverProvenance")
+    if not isinstance(bm25_config, BM25Config):
+        raise TypeError("bm25_config must be BM25Config")
     if retriever_provenance.retriever_name != "bm25":
         raise ValueError("retriever_provenance must describe the bm25 family")
     if retriever_provenance.library_name != "rank_bm25":
@@ -266,17 +249,25 @@ def validate_bm25_index_binding(
         or retriever_provenance.tokenizer_revision is not None
     ):
         raise ValueError("BM25 retriever provenance must not declare a tokenizer")
+    expected_fields = {
+        "query_preprocessing": bm25_config.query_preprocessing,
+        "document_preprocessing": bm25_config.document_preprocessing,
+        "normalization": bm25_config.normalization,
+        "score_semantics": bm25_config.score_semantics,
+        "index_type": bm25_config.index_type,
+        "index_config": bm25_config.scientific_json(),
+    }
+    if any(
+        getattr(retriever_provenance, name) != value
+        for name, value in expected_fields.items()
+    ):
+        raise ValueError("BM25 retriever provenance does not match bm25_config")
 
     expected = compute_index_fingerprint_sha256(
         corpus_manifest_sha256=corpus_provenance.manifest_sha256,
         document_id_map_sha256=corpus_provenance.document_id_map_sha256,
         library_version=retriever_provenance.library_version,
-        query_preprocessing=retriever_provenance.query_preprocessing,
-        document_preprocessing=retriever_provenance.document_preprocessing,
-        normalization=retriever_provenance.normalization,
-        score_semantics=retriever_provenance.score_semantics,
-        index_type=retriever_provenance.index_type,
-        index_config=retriever_provenance.index_config,
+        bm25_config=bm25_config,
     )
     if retriever_provenance.index_fingerprint_sha256 != expected:
         raise ValueError(
@@ -297,6 +288,7 @@ def produce_bm25_candidate_artifact(
     producing_git_commit: str,
     worktree_clean: bool,
     environment_fingerprint_sha256: str,
+    bm25_config: BM25Config = BM25_CONFIG,
 ) -> CandidateArtifact:
     """Validate and freeze already-returned raw BM25 retrieval results."""
     if not isinstance(dataset_provenance, DatasetProvenance):
@@ -317,6 +309,7 @@ def produce_bm25_candidate_artifact(
     validate_bm25_index_binding(
         corpus_provenance=corpus_provenance,
         retriever_provenance=retriever_provenance,
+        bm25_config=bm25_config,
     )
 
     if isinstance(raw_results, (str, bytes)) or not isinstance(raw_results, Sequence):

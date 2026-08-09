@@ -7,7 +7,6 @@ scientific retrieval provenance remain the responsibility of
 """
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
 import hashlib
 from importlib import metadata as importlib_metadata
 import json
@@ -22,30 +21,10 @@ from rank_bm25 import BM25Okapi
 
 from config import INDEX_DIR
 from retrievers import BaseRetriever
+from retrievers.bm25_config import BM25_CONFIG, BM25Config
 
 
 BM25_CACHE_SCHEMA_VERSION = "sprint3.bm25-cache.v1"
-BM25_QUERY_PREPROCESSING = "lowercase then split on whitespace"
-BM25_DOCUMENT_PREPROCESSING = "lowercase then split exact document text on whitespace"
-BM25_RANKING_SEMANTICS = (
-    "BM25Okapi.get_scores; argsort()[-top_k:][::-1]; include only score > 0"
-)
-
-
-@dataclass(frozen=True)
-class BM25RuntimeConfig:
-    """Explicit rank_bm25 configuration preserving version 0.2.2 defaults."""
-
-    tokenizer: None = None
-    k1: float = 1.5
-    b: float = 0.75
-    epsilon: float = 0.25
-    query_preprocessing: str = BM25_QUERY_PREPROCESSING
-    document_preprocessing: str = BM25_DOCUMENT_PREPROCESSING
-    ranking_semantics: str = BM25_RANKING_SEMANTICS
-
-
-BM25_RUNTIME_CONFIG = BM25RuntimeConfig()
 
 
 def _rank_bm25_version() -> str:
@@ -67,10 +46,10 @@ def _canonical_doc_id(document_id):
 
 
 class BM25Retriever(BaseRetriever):
-    def __init__(self, runtime_config: BM25RuntimeConfig = BM25_RUNTIME_CONFIG):
+    def __init__(self, runtime_config: BM25Config = BM25_CONFIG):
         super().__init__("bm25")
-        if not isinstance(runtime_config, BM25RuntimeConfig):
-            raise TypeError("runtime_config must be BM25RuntimeConfig")
+        if not isinstance(runtime_config, BM25Config):
+            raise TypeError("runtime_config must be BM25Config")
         self._runtime_config = runtime_config
         self._runtime_index_fingerprint = None
         self._cache_path = None
@@ -84,6 +63,10 @@ class BM25Retriever(BaseRetriever):
     @property
     def cache_path(self):
         return self._cache_path
+
+    @property
+    def runtime_config(self):
+        return self._runtime_config
 
     def _tokenize(self, text: str) -> List[str]:
         """Simple whitespace + lowercase tokenization."""
@@ -127,7 +110,7 @@ class BM25Retriever(BaseRetriever):
             for position, document in enumerate(corpus)
         ]
         payload = {
-            "bm25_runtime_config": asdict(self._runtime_config),
+            "bm25_runtime_config": self._runtime_config.scientific_payload(),
             "corpus": corpus_payload,
             "corpus_document_count": len(corpus),
             "library_name": "rank_bm25",
@@ -142,7 +125,7 @@ class BM25Retriever(BaseRetriever):
             "cache_schema_version": BM25_CACHE_SCHEMA_VERSION,
             "runtime_fingerprint": fingerprint,
             "rank_bm25_version": library_version,
-            "bm25_runtime_config": asdict(self._runtime_config),
+            "bm25_runtime_config": self._runtime_config.scientific_payload(),
             "corpus_document_count": document_count,
         }
 

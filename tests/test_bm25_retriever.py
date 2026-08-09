@@ -11,9 +11,9 @@ from rank_bm25 import BM25Okapi
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import retrievers.bm25_retriever as bm25_module
+from retrievers.bm25_config import BM25_CONFIG, BM25Config
 from retrievers.bm25_retriever import (
     BM25_CACHE_SCHEMA_VERSION,
-    BM25_RUNTIME_CONFIG,
     BM25Retriever,
 )
 
@@ -74,12 +74,28 @@ def test_corpus_changes_produce_different_runtime_fingerprint(changed_corpus):
     assert changed.cache_path != original.cache_path
 
 
-def test_bm25_configuration_change_produces_different_fingerprint():
+@pytest.mark.parametrize(
+    "changed_config",
+    [
+        replace(BM25_CONFIG, k1=1.6),
+        replace(BM25_CONFIG, b=0.6),
+        replace(BM25_CONFIG, epsilon=0.3),
+        replace(BM25_CONFIG, query_preprocessing="different preprocessing"),
+        replace(BM25_CONFIG, ranking_semantics="different ranking semantics"),
+    ],
+)
+def test_bm25_configuration_change_produces_different_fingerprint(changed_config):
     original = BM25Retriever()
-    changed = BM25Retriever(replace(BM25_RUNTIME_CONFIG, k1=1.6))
+    changed = BM25Retriever(changed_config)
     original.index(corpus())
     changed.index(corpus())
     assert changed.runtime_index_fingerprint != original.runtime_index_fingerprint
+
+
+def test_runtime_uses_authoritative_default_config_object():
+    retriever = BM25Retriever()
+    assert retriever.runtime_config is BM25_CONFIG
+    assert isinstance(retriever.runtime_config, BM25Config)
 
 
 def test_library_version_change_produces_different_fingerprint(monkeypatch):

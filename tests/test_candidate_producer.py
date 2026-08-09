@@ -1,5 +1,7 @@
 from dataclasses import replace
 import hashlib
+import inspect
+import json
 import os
 import sys
 
@@ -9,6 +11,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from evaluation.metric_registry import DatasetId
+import retrievers.bm25_config as bm25_config_module
+from retrievers.bm25_config import BM25_CONFIG
+import retrieval_artifacts.producer as producer_module
 from retrieval_artifacts import (
     CandidateArtifact,
     CorpusProvenance,
@@ -66,16 +71,18 @@ def corpus(corpus_records=None, **changes):
     return CorpusProvenance(**values)
 
 
-def bm25(corpus_records=None, *, library_version="0.2.2"):
+def bm25(corpus_records=None, *, library_version="0.2.2", bm25_config=BM25_CONFIG):
     corpus_records = records() if corpus_records is None else corpus_records
     fingerprint = compute_index_fingerprint_sha256(
         corpus_manifest_sha256=compute_corpus_manifest_sha256(corpus_records),
         document_id_map_sha256=compute_document_id_map_sha256(corpus_records),
         library_version=library_version,
+        bm25_config=bm25_config,
     )
     return build_bm25_retriever_provenance(
         library_version=library_version,
         index_fingerprint_sha256=fingerprint,
+        bm25_config=bm25_config,
     )
 
 
@@ -235,15 +242,38 @@ def test_bm25_provenance_describes_current_repository_behavior():
     assert value.model_id is None and value.tokenizer_id is None
     assert value.query_preprocessing == "lowercase then split on whitespace"
     assert value.normalization == "none"
-    assert "constructor defaults" in value.index_config
+    assert value.index_config == BM25_CONFIG.scientific_json()
+    config_payload = json.loads(value.index_config)
+    assert config_payload["tokenizer"] is None
+    assert config_payload["k1"] == 1.5
+    assert config_payload["b"] == 0.75
+    assert config_payload["epsilon"] == 0.25
+
+
+def test_runtime_and_producer_share_authoritative_default_config():
+    assert producer_module.BM25_CONFIG is BM25_CONFIG
+
+
+def test_neutral_bm25_config_has_no_cross_layer_imports():
+    source = inspect.getsource(bm25_config_module)
+    assert "retrieval_artifacts" not in source
+    assert "evaluation" not in source
+    assert "datasets" not in source
 
 
 @pytest.mark.parametrize(
     "change",
     [
         {"library_version": "new-version"},
-        {"query_preprocessing": "different query preprocessing"},
-        {"index_config": "different BM25 configuration"},
+        {"bm25_config": replace(BM25_CONFIG, k1=1.6)},
+        {"bm25_config": replace(BM25_CONFIG, b=0.6)},
+        {"bm25_config": replace(BM25_CONFIG, epsilon=0.3)},
+        {"bm25_config": replace(BM25_CONFIG, query_preprocessing="different")},
+        {"bm25_config": replace(BM25_CONFIG, document_preprocessing="different")},
+        {"bm25_config": replace(BM25_CONFIG, normalization="different")},
+        {"bm25_config": replace(BM25_CONFIG, score_semantics="different")},
+        {"bm25_config": replace(BM25_CONFIG, ranking_semantics="different")},
+        {"bm25_config": replace(BM25_CONFIG, index_type="different")},
     ],
 )
 def test_index_fingerprint_changes_with_bm25_configuration(change):
@@ -289,7 +319,7 @@ def test_producer_rejects_bm25_configuration_changed_without_new_fingerprint():
         stale,
         query_preprocessing="different query preprocessing",
     )
-    with pytest.raises(ValueError, match="index fingerprint"):
+    with pytest.raises(ValueError, match="does not match bm25_config"):
         produce(retriever_provenance=changed_configuration)
 
 
