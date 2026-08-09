@@ -21,15 +21,19 @@ from retrieval_artifacts import (
     CorpusManifestEntry,
     CorpusProvenance,
     CorpusRecord,
-    DatasetProvenance,
     RawCandidateResult,
+    SAMPLE_MANIFEST_SCHEMA_VERSION,
+    SampleManifest,
+    SampleManifestEntry,
     build_bm25_retriever_provenance,
     compute_corpus_records_integrity_sha256,
     compute_document_id_map_sha256,
     compute_index_fingerprint_sha256,
     corpus_provenance_from_corpus_manifest,
+    dataset_provenance_from_sample_manifest,
     document_content_sha256,
     produce_bm25_candidate_artifact,
+    query_text_sha256,
 )
 
 
@@ -46,22 +50,44 @@ def records():
     )
 
 
-def dataset():
-    return DatasetProvenance(
+def sample_manifest(*, sample_id="q-1", query_text="Exact Query?", **changes):
+    values = dict(
+        schema_version=SAMPLE_MANIFEST_SCHEMA_VERSION,
         dataset_id=DatasetId.PUBMEDQA,
         source="synthetic fixture",
         config=None,
         revision="dataset-revision",
         split="test",
-        sample_manifest_id=f"sample-manifest:sha256:{SHA_A}",
-        sample_manifest_sha256=SHA_A,
+        sampling_algorithm="fixture-source-order.v1",
         sampling_seed=None,
-        sampling_algorithm=None,
+        requested_sample_size=None,
+        selection_dependencies=(),
+        entries=(
+            SampleManifestEntry(
+                position=0,
+                sample_id=sample_id,
+                source_sample_id="source-q-1",
+                query_text_sha256=query_text_sha256(query_text),
+            ),
+        ),
     )
+    values.update(changes)
+    return SampleManifest(**values)
 
 
-def manifest(corpus_records=None, **changes):
+def dataset(sample_manifest_value=None, **changes):
+    sample_manifest_value = (
+        sample_manifest() if sample_manifest_value is None else sample_manifest_value
+    )
+    value = dataset_provenance_from_sample_manifest(sample_manifest_value)
+    return replace(value, **changes) if changes else value
+
+
+def manifest(corpus_records=None, sample_manifest_value=None, **changes):
     corpus_records = records() if corpus_records is None else corpus_records
+    sample_manifest_value = (
+        sample_manifest() if sample_manifest_value is None else sample_manifest_value
+    )
     entries = tuple(
         CorpusManifestEntry(
             position=int(record.corpus_position),
@@ -87,8 +113,8 @@ def manifest(corpus_records=None, **changes):
         revision="corpus-revision",
         split="test",
         construction_algorithm="exact-text.v1",
-        input_sample_manifest_id=f"sample-manifest:sha256:{SHA_A}",
-        input_sample_manifest_sha256=SHA_A,
+        input_sample_manifest_id=sample_manifest_value.manifest_id,
+        input_sample_manifest_sha256=sample_manifest_value.sha256,
         dependencies=(),
         rng_family=None,
         sampling_seed=None,
@@ -140,21 +166,31 @@ def bm25(
 
 def produce(*, corpus_records=None, raw_results=None, **changes):
     corpus_records = records() if corpus_records is None else corpus_records
-    dataset_provenance = changes.get("dataset_provenance", dataset())
-    corpus_manifest = changes.get("corpus_manifest", manifest(corpus_records))
+    sample_manifest_value = changes.get("sample_manifest", sample_manifest())
+    dataset_provenance = changes.get(
+        "dataset_provenance", dataset(sample_manifest_value)
+    )
+    corpus_manifest = changes.get(
+        "corpus_manifest",
+        manifest(corpus_records, sample_manifest_value=sample_manifest_value),
+    )
     raw_results = (
         (RawCandidateResult(2, 0.25), RawCandidateResult("doc-a", 7.5))
         if raw_results is None
         else raw_results
     )
-    values = dict(
-        dataset_provenance=dataset_provenance,
-        corpus_manifest=corpus_manifest,
-        corpus_provenance=corpus(
+    corpus_provenance = changes.get("corpus_provenance")
+    if corpus_provenance is None:
+        corpus_provenance = corpus(
             corpus_records,
             corpus_manifest=corpus_manifest,
             dataset_provenance=dataset_provenance,
-        ),
+        )
+    values = dict(
+        sample_manifest=sample_manifest_value,
+        dataset_provenance=dataset_provenance,
+        corpus_manifest=corpus_manifest,
+        corpus_provenance=corpus_provenance,
         sample_id="q-1",
         query_text="Exact Query?",
         retriever_provenance=bm25(
@@ -178,6 +214,65 @@ def test_valid_results_produce_candidate_artifact_without_sorting():
     assert [candidate.native_score for candidate in value.candidates] == [0.25, 7.5]
     assert [candidate.rank for candidate in value.candidates] == [1, 2]
     assert [candidate.corpus_position for candidate in value.candidates] == [1, 0]
+
+
+def test_producer_accepts_exact_sample_manifest_and_is_deterministic():
+    first = produce()
+    second = produce()
+    assert first.artifact_id == second.artifact_id
+    assert first.query_text == "Exact Query?"
+
+
+def test_producer_rejects_sample_manifest_id_and_sha_mismatches():
+    base_dataset = dataset()
+    with pytest.raises(ValueError, match="does not match the supplied SampleManifest"):
+        produce(
+            dataset_provenance=replace(
+                base_dataset,
+                sample_manifest_id=f"sample-manifest:sha256:{SHA_B}",
+            ),
+            corpus_provenance=corpus(),
+        )
+    with pytest.raises(ValueError, match="does not match the supplied SampleManifest"):
+        produce(
+            dataset_provenance=replace(
+                base_dataset,
+                sample_manifest_sha256=SHA_B,
+            ),
+            corpus_provenance=corpus(),
+        )
+
+
+def test_producer_rejects_sample_manifest_dataset_mismatch():
+    with pytest.raises(ValueError, match="does not match the supplied SampleManifest"):
+        produce(
+            dataset_provenance=replace(dataset(), dataset_id=DatasetId.HOTPOTQA),
+            corpus_provenance=corpus(),
+        )
+
+
+def test_producer_rejects_different_actual_manifest_even_when_ids_overlap():
+    changed_manifest = sample_manifest(query_text="Other exact query")
+    with pytest.raises(ValueError, match="does not match the supplied SampleManifest"):
+        produce(
+            sample_manifest=changed_manifest,
+            dataset_provenance=dataset(),
+            corpus_provenance=corpus(),
+        )
+
+
+def test_producer_rejects_absent_sample_and_changed_exact_query():
+    with pytest.raises(KeyError, match="absent from the manifest"):
+        produce(sample_id="missing")
+    with pytest.raises(ValueError, match="query_text does not match"):
+        produce(query_text="Exact Query? ")
+
+
+def test_producer_preserves_integer_string_sample_id_distinction():
+    integer_manifest = sample_manifest(sample_id=1)
+    assert produce(sample_manifest=integer_manifest, sample_id=1).sample_id == 1
+    with pytest.raises(KeyError, match="absent from the manifest"):
+        produce(sample_manifest=integer_manifest, sample_id="1")
 
 
 def test_candidate_entries_use_authoritative_corpus_fields():

@@ -23,6 +23,11 @@ from retrieval_artifacts.contracts import (
     DatasetProvenance,
     RetrieverProvenance,
 )
+from retrieval_artifacts.sample_manifest import (
+    SampleManifest,
+    dataset_provenance_from_sample_manifest,
+    verify_manifest_sample,
+)
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -381,6 +386,7 @@ def validate_bm25_index_binding(
 
 def produce_bm25_candidate_artifact(
     *,
+    sample_manifest: SampleManifest,
     dataset_provenance: DatasetProvenance,
     corpus_manifest: CorpusManifest,
     corpus_provenance: CorpusProvenance,
@@ -396,8 +402,22 @@ def produce_bm25_candidate_artifact(
     bm25_config: BM25Config = BM25_CONFIG,
 ) -> CandidateArtifact:
     """Validate and freeze already-returned raw BM25 retrieval results."""
+    if not isinstance(sample_manifest, SampleManifest):
+        raise TypeError("sample_manifest must be a SampleManifest")
     if not isinstance(dataset_provenance, DatasetProvenance):
         raise TypeError("dataset_provenance must be DatasetProvenance")
+    expected_dataset_provenance = dataset_provenance_from_sample_manifest(
+        sample_manifest
+    )
+    if dataset_provenance != expected_dataset_provenance:
+        raise ValueError(
+            "dataset_provenance does not match the supplied SampleManifest"
+        )
+    verify_manifest_sample(
+        sample_manifest,
+        sample_id=sample_id,
+        query_text=query_text,
+    )
     if not isinstance(corpus_provenance, CorpusProvenance):
         raise TypeError("corpus_provenance must be CorpusProvenance")
     if not isinstance(retriever_provenance, RetrieverProvenance):
