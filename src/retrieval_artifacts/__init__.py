@@ -9,6 +9,12 @@ from retrieval_artifacts.contracts import (
     DatasetProvenance,
     RetrieverProvenance,
 )
+from retrieval_artifacts.corpus_manifest import (
+    CORPUS_MANIFEST_SCHEMA_VERSION,
+    CorpusConstructionDependency,
+    CorpusManifest,
+    CorpusManifestEntry,
+)
 from retrieval_artifacts.producer import (
     CorpusRecord,
     RawCandidateResult,
@@ -38,6 +44,10 @@ __all__ = [
     "CorpusProvenance",
     "DatasetProvenance",
     "RetrieverProvenance",
+    "CORPUS_MANIFEST_SCHEMA_VERSION",
+    "CorpusConstructionDependency",
+    "CorpusManifest",
+    "CorpusManifestEntry",
     "CorpusRecord",
     "RawCandidateResult",
     "build_bm25_retriever_provenance",
