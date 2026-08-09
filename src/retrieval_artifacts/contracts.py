@@ -119,6 +119,14 @@ class DatasetProvenance:
 
 @dataclass(frozen=True)
 class CorpusProvenance:
+    """Compact CandidateArtifact projection of a validated CorpusManifest.
+
+    ``manifest_sha256`` is the scientific ``CorpusManifest.sha256``. Concrete
+    ordered-record integrity is a separate producer-layer fingerprint.
+    ``preprocessing_version`` currently projects the manifest's versioned
+    corpus construction/preparation algorithm.
+    """
+
     corpus_id: str
     source: str
     revision: str

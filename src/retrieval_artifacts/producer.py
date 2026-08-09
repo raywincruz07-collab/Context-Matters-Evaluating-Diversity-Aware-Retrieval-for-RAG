@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from retrievers.bm25_config import BM25_CONFIG, BM25Config
+from retrieval_artifacts.corpus_manifest import CorpusManifest
 from retrieval_artifacts.contracts import (
     CANDIDATE_SCHEMA_VERSION,
     CandidateArtifact,
@@ -57,21 +58,23 @@ def _canonical_hash(payload: Any) -> str:
 
 @dataclass(frozen=True)
 class CorpusRecord:
-    """Authoritative corpus row used to validate raw retrieval results."""
+    """Exact stored and prepared corpus content used by Sprint 3 retrieval."""
 
     document_id: str | int
-    source_document_id: str | int | None
+    source_document_id: str | int
+    title: str | None
     text: str
+    retrieval_content: str
     corpus_position: int
 
     def __post_init__(self) -> None:
         _require_stable_id(self.document_id, "document_id")
-        if self.source_document_id is not None:
-            _require_stable_id(self.source_document_id, "source_document_id")
-        if not isinstance(self.text, str):
-            raise TypeError("text must be a string")
-        if not self.text:
-            raise ValueError("text must be non-empty")
+        _require_stable_id(self.source_document_id, "source_document_id")
+        if self.title is not None and not isinstance(self.title, str):
+            raise TypeError("title must be None or a string")
+        for name in ("text", "retrieval_content"):
+            if not isinstance(getattr(self, name), str):
+                raise TypeError(f"{name} must be a string")
         if isinstance(self.corpus_position, (bool, np.bool_)) or not isinstance(
             self.corpus_position, Integral
         ):
@@ -116,6 +119,9 @@ def _validated_corpus_records(
     document_ids = [record.document_id for record in corpus_records]
     if len(set(document_ids)) != len(document_ids):
         raise ValueError("corpus document_id values must be unique")
+    source_ids = [record.source_document_id for record in corpus_records]
+    if len(set(source_ids)) != len(source_ids):
+        raise ValueError("corpus source_document_id values must be unique")
     positions = [int(record.corpus_position) for record in corpus_records]
     if len(set(positions)) != len(positions):
         raise ValueError("corpus_position values must be unique")
@@ -142,25 +148,123 @@ def compute_document_id_map_sha256(
     return _canonical_hash(payload)
 
 
-def compute_corpus_manifest_sha256(
+def compute_corpus_records_integrity_sha256(
     corpus_records: tuple[CorpusRecord, ...],
 ) -> str:
-    """Hash ordered corpus identities and exact text checksums."""
+    """Hash the exact ordered concrete CorpusRecord representation."""
     records = _validated_corpus_records(corpus_records)
     payload = [
         {
             "corpus_position": int(record.corpus_position),
-            "document_content_sha256": document_content_sha256(record.text),
             "document_id": _canonical_id(record.document_id),
-            "source_document_id": (
+            "retrieval_content_sha256": document_content_sha256(
+                record.retrieval_content
+            ),
+            "source_document_id": _canonical_id(record.source_document_id),
+            "text_sha256": document_content_sha256(record.text),
+            "title_sha256": (
                 None
-                if record.source_document_id is None
-                else _canonical_id(record.source_document_id)
+                if record.title is None
+                else document_content_sha256(record.title)
             ),
         }
         for record in records
     ]
     return _canonical_hash(payload)
+
+
+def _stable_ids_equal(left: str | int, right: str | int) -> bool:
+    """Compare stable IDs without equating string and integral representations."""
+    if isinstance(left, str) or isinstance(right, str):
+        return isinstance(left, str) and isinstance(right, str) and left == right
+    return int(left) == int(right)
+
+
+def validate_corpus_records_against_manifest(
+    corpus_manifest: CorpusManifest,
+    corpus_records: tuple[CorpusRecord, ...],
+) -> None:
+    """Validate exact ordered records against every CorpusManifest entry."""
+    if not isinstance(corpus_manifest, CorpusManifest):
+        raise TypeError("corpus_manifest must be a CorpusManifest")
+    records = _validated_corpus_records(corpus_records)
+    if len(records) != corpus_manifest.document_count:
+        raise ValueError("corpus record count does not match CorpusManifest")
+
+    for record, entry in zip(records, corpus_manifest.entries):
+        if record.corpus_position != entry.position:
+            raise ValueError("corpus record position does not match CorpusManifest")
+        if not _stable_ids_equal(record.document_id, entry.doc_id):
+            raise ValueError("corpus record document_id does not match CorpusManifest")
+        if not _stable_ids_equal(
+            record.source_document_id, entry.source_document_id
+        ):
+            raise ValueError(
+                "corpus record source_document_id does not match CorpusManifest"
+            )
+        if (record.title is None) != (entry.title_sha256 is None):
+            raise ValueError("corpus record title presence does not match CorpusManifest")
+        if record.title is not None and (
+            document_content_sha256(record.title) != entry.title_sha256
+        ):
+            raise ValueError("corpus record title does not match CorpusManifest")
+        if document_content_sha256(record.text) != entry.text_sha256:
+            raise ValueError("corpus record text does not match CorpusManifest")
+        if (
+            document_content_sha256(record.retrieval_content)
+            != entry.retrieval_content_sha256
+        ):
+            raise ValueError(
+                "corpus record retrieval_content does not match CorpusManifest"
+            )
+
+
+def validate_corpus_dataset_binding(
+    *,
+    corpus_manifest: CorpusManifest,
+    dataset_provenance: DatasetProvenance,
+) -> None:
+    """Reject dataset or SampleManifest drift at the corpus boundary."""
+    if not isinstance(corpus_manifest, CorpusManifest):
+        raise TypeError("corpus_manifest must be a CorpusManifest")
+    if not isinstance(dataset_provenance, DatasetProvenance):
+        raise TypeError("dataset_provenance must be DatasetProvenance")
+    if corpus_manifest.dataset_id is not dataset_provenance.dataset_id:
+        raise ValueError("CorpusManifest dataset_id does not match DatasetProvenance")
+    if corpus_manifest.input_sample_manifest_id is not None:
+        if (
+            corpus_manifest.input_sample_manifest_id
+            != dataset_provenance.sample_manifest_id
+        ):
+            raise ValueError("CorpusManifest SampleManifest ID does not match dataset")
+        if (
+            corpus_manifest.input_sample_manifest_sha256
+            != dataset_provenance.sample_manifest_sha256
+        ):
+            raise ValueError("CorpusManifest SampleManifest SHA does not match dataset")
+
+
+def corpus_provenance_from_corpus_manifest(
+    *,
+    corpus_manifest: CorpusManifest,
+    corpus_records: tuple[CorpusRecord, ...],
+    dataset_provenance: DatasetProvenance,
+) -> CorpusProvenance:
+    """Derive compact provenance only after validating scientific bindings."""
+    validate_corpus_dataset_binding(
+        corpus_manifest=corpus_manifest,
+        dataset_provenance=dataset_provenance,
+    )
+    validate_corpus_records_against_manifest(corpus_manifest, corpus_records)
+    return CorpusProvenance(
+        corpus_id=corpus_manifest.corpus_manifest_id,
+        source=corpus_manifest.source,
+        revision=corpus_manifest.revision,
+        document_count=corpus_manifest.document_count,
+        manifest_sha256=corpus_manifest.sha256,
+        document_id_map_sha256=compute_document_id_map_sha256(corpus_records),
+        preprocessing_version=corpus_manifest.construction_algorithm,
+    )
 
 
 def compute_index_fingerprint_sha256(
@@ -278,6 +382,7 @@ def validate_bm25_index_binding(
 def produce_bm25_candidate_artifact(
     *,
     dataset_provenance: DatasetProvenance,
+    corpus_manifest: CorpusManifest,
     corpus_provenance: CorpusProvenance,
     sample_id: str | int,
     query_text: str,
@@ -298,14 +403,15 @@ def produce_bm25_candidate_artifact(
     if not isinstance(retriever_provenance, RetrieverProvenance):
         raise TypeError("retriever_provenance must be RetrieverProvenance")
     records = _validated_corpus_records(corpus_records)
-    if corpus_provenance.document_count != len(records):
-        raise ValueError("corpus document_count does not match corpus_records")
-    actual_manifest = compute_corpus_manifest_sha256(records)
-    if corpus_provenance.manifest_sha256 != actual_manifest:
-        raise ValueError("corpus manifest_sha256 does not match corpus_records")
-    actual_id_map = compute_document_id_map_sha256(records)
-    if corpus_provenance.document_id_map_sha256 != actual_id_map:
-        raise ValueError("corpus document_id_map_sha256 does not match corpus_records")
+    expected_corpus_provenance = corpus_provenance_from_corpus_manifest(
+        corpus_manifest=corpus_manifest,
+        corpus_records=records,
+        dataset_provenance=dataset_provenance,
+    )
+    if corpus_provenance != expected_corpus_provenance:
+        raise ValueError(
+            "corpus_provenance does not match the validated CorpusManifest"
+        )
     validate_bm25_index_binding(
         corpus_provenance=corpus_provenance,
         retriever_provenance=retriever_provenance,
@@ -342,7 +448,9 @@ def produce_bm25_candidate_artifact(
                 source_document_id=record.source_document_id,
                 corpus_position=record.corpus_position,
                 native_score=result.native_score,
-                document_content_sha256=document_content_sha256(record.text),
+                document_content_sha256=document_content_sha256(
+                    record.retrieval_content
+                ),
             )
         )
 

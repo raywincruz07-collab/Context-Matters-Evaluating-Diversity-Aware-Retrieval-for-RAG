@@ -15,15 +15,19 @@ import retrievers.bm25_config as bm25_config_module
 from retrievers.bm25_config import BM25_CONFIG
 import retrieval_artifacts.producer as producer_module
 from retrieval_artifacts import (
+    CORPUS_MANIFEST_SCHEMA_VERSION,
     CandidateArtifact,
+    CorpusManifest,
+    CorpusManifestEntry,
     CorpusProvenance,
     CorpusRecord,
     DatasetProvenance,
     RawCandidateResult,
     build_bm25_retriever_provenance,
-    compute_corpus_manifest_sha256,
+    compute_corpus_records_integrity_sha256,
     compute_document_id_map_sha256,
     compute_index_fingerprint_sha256,
+    corpus_provenance_from_corpus_manifest,
     document_content_sha256,
     produce_bm25_candidate_artifact,
 )
@@ -36,9 +40,9 @@ GIT_A = "1" * 40
 
 def records():
     return (
-        CorpusRecord("doc-a", "source-a", "Alpha text", 0),
-        CorpusRecord(2, 200, "Beta text ", 1),
-        CorpusRecord("doc-c", None, " Gamma text", 2),
+        CorpusRecord("doc-a", "source-a", None, "Alpha text", "Alpha text", 0),
+        CorpusRecord(2, 200, "Beta title", "Beta text ", "Beta prepared", 1),
+        CorpusRecord("doc-c", "source-c", None, " Gamma text", " Gamma text", 2),
     )
 
 
@@ -49,32 +53,80 @@ def dataset():
         config=None,
         revision="dataset-revision",
         split="test",
-        sample_manifest_id="sample-manifest",
+        sample_manifest_id=f"sample-manifest:sha256:{SHA_A}",
         sample_manifest_sha256=SHA_A,
         sampling_seed=None,
         sampling_algorithm=None,
     )
 
 
-def corpus(corpus_records=None, **changes):
+def manifest(corpus_records=None, **changes):
     corpus_records = records() if corpus_records is None else corpus_records
+    entries = tuple(
+        CorpusManifestEntry(
+            position=int(record.corpus_position),
+            doc_id=record.document_id,
+            source_document_id=record.source_document_id,
+            title_sha256=(
+                None
+                if record.title is None
+                else document_content_sha256(record.title)
+            ),
+            text_sha256=document_content_sha256(record.text),
+            retrieval_content_sha256=document_content_sha256(
+                record.retrieval_content
+            ),
+        )
+        for record in corpus_records
+    )
     values = dict(
-        corpus_id="synthetic-corpus",
-        source="synthetic fixture",
+        schema_version=CORPUS_MANIFEST_SCHEMA_VERSION,
+        dataset_id=DatasetId.PUBMEDQA,
+        source="synthetic corpus fixture",
+        config=None,
         revision="corpus-revision",
-        document_count=len(corpus_records),
-        manifest_sha256=compute_corpus_manifest_sha256(corpus_records),
-        document_id_map_sha256=compute_document_id_map_sha256(corpus_records),
-        preprocessing_version="exact-text.v1",
+        split="test",
+        construction_algorithm="exact-text.v1",
+        input_sample_manifest_id=f"sample-manifest:sha256:{SHA_A}",
+        input_sample_manifest_sha256=SHA_A,
+        dependencies=(),
+        rng_family=None,
+        sampling_seed=None,
+        rng_state_semantics=None,
+        requested_negatives_per_query=None,
+        negative_sampling_scope=None,
+        negative_exclusion_scope=None,
+        negative_sampling_without_replacement=None,
+        final_source_id_ordering=None,
+        entries=entries,
     )
     values.update(changes)
-    return CorpusProvenance(**values)
+    return CorpusManifest(**values)
 
 
-def bm25(corpus_records=None, *, library_version="0.2.2", bm25_config=BM25_CONFIG):
+def corpus(corpus_records=None, corpus_manifest=None, dataset_provenance=None, **changes):
     corpus_records = records() if corpus_records is None else corpus_records
+    corpus_manifest = manifest(corpus_records) if corpus_manifest is None else corpus_manifest
+    dataset_provenance = dataset() if dataset_provenance is None else dataset_provenance
+    value = corpus_provenance_from_corpus_manifest(
+        corpus_manifest=corpus_manifest,
+        corpus_records=corpus_records,
+        dataset_provenance=dataset_provenance,
+    )
+    return replace(value, **changes) if changes else value
+
+
+def bm25(
+    corpus_records=None,
+    *,
+    corpus_manifest=None,
+    library_version="0.2.2",
+    bm25_config=BM25_CONFIG,
+):
+    corpus_records = records() if corpus_records is None else corpus_records
+    corpus_manifest = manifest(corpus_records) if corpus_manifest is None else corpus_manifest
     fingerprint = compute_index_fingerprint_sha256(
-        corpus_manifest_sha256=compute_corpus_manifest_sha256(corpus_records),
+        corpus_manifest_sha256=corpus_manifest.sha256,
         document_id_map_sha256=compute_document_id_map_sha256(corpus_records),
         library_version=library_version,
         bm25_config=bm25_config,
@@ -88,17 +140,26 @@ def bm25(corpus_records=None, *, library_version="0.2.2", bm25_config=BM25_CONFI
 
 def produce(*, corpus_records=None, raw_results=None, **changes):
     corpus_records = records() if corpus_records is None else corpus_records
+    dataset_provenance = changes.get("dataset_provenance", dataset())
+    corpus_manifest = changes.get("corpus_manifest", manifest(corpus_records))
     raw_results = (
         (RawCandidateResult(2, 0.25), RawCandidateResult("doc-a", 7.5))
         if raw_results is None
         else raw_results
     )
     values = dict(
-        dataset_provenance=dataset(),
-        corpus_provenance=corpus(corpus_records),
+        dataset_provenance=dataset_provenance,
+        corpus_manifest=corpus_manifest,
+        corpus_provenance=corpus(
+            corpus_records,
+            corpus_manifest=corpus_manifest,
+            dataset_provenance=dataset_provenance,
+        ),
         sample_id="q-1",
         query_text="Exact Query?",
-        retriever_provenance=bm25(corpus_records),
+        retriever_provenance=bm25(
+            corpus_records, corpus_manifest=corpus_manifest
+        ),
         requested_top_n=3,
         raw_results=raw_results,
         corpus_records=corpus_records,
@@ -125,7 +186,9 @@ def test_candidate_entries_use_authoritative_corpus_fields():
     assert candidate.document_id == 2
     assert candidate.source_document_id == 200
     assert candidate.corpus_position == 1
-    assert candidate.document_content_sha256 == document_content_sha256("Beta text ")
+    assert candidate.document_content_sha256 == document_content_sha256(
+        "Beta prepared"
+    )
     with pytest.raises(TypeError):
         RawCandidateResult(document_id=2, native_score=4.0, text="stale text")
 
@@ -166,27 +229,27 @@ def test_raw_candidate_rejects_invalid_scores(score):
 
 def test_corpus_rejects_duplicate_ids_and_positions():
     duplicate_id = (
-        CorpusRecord("doc", None, "a", 0),
-        CorpusRecord("doc", None, "b", 1),
+        CorpusRecord("doc", "source-a", None, "a", "a", 0),
+        CorpusRecord("doc", "source-b", None, "b", "b", 1),
     )
     duplicate_position = (
-        CorpusRecord("a", None, "a", 0),
-        CorpusRecord("b", None, "b", 0),
+        CorpusRecord("a", "source-a", None, "a", "a", 0),
+        CorpusRecord("b", "source-b", None, "b", "b", 0),
     )
     with pytest.raises(ValueError, match="document_id values must be unique"):
-        compute_corpus_manifest_sha256(duplicate_id)
+        compute_corpus_records_integrity_sha256(duplicate_id)
     with pytest.raises(ValueError, match="corpus_position values must be unique"):
-        compute_corpus_manifest_sha256(duplicate_position)
+        compute_corpus_records_integrity_sha256(duplicate_position)
 
 
 def test_corpus_rejects_position_gap_and_tuple_order_mismatch():
     gap = (
-        CorpusRecord("a", None, "a", 0),
-        CorpusRecord("b", None, "b", 2),
+        CorpusRecord("a", "source-a", None, "a", "a", 0),
+        CorpusRecord("b", "source-b", None, "b", "b", 2),
     )
     reversed_order = (
-        CorpusRecord("b", None, "b", 1),
-        CorpusRecord("a", None, "a", 0),
+        CorpusRecord("b", "source-b", None, "b", "b", 1),
+        CorpusRecord("a", "source-a", None, "a", "a", 0),
     )
     with pytest.raises(ValueError, match="exactly cover"):
         compute_document_id_map_sha256(gap)
@@ -195,17 +258,19 @@ def test_corpus_rejects_position_gap_and_tuple_order_mismatch():
 
 
 def test_producer_validates_corpus_provenance_against_records():
-    with pytest.raises(ValueError, match="document_count"):
+    with pytest.raises(ValueError, match="validated CorpusManifest"):
         produce(corpus_provenance=corpus(document_count=4))
-    with pytest.raises(ValueError, match="manifest_sha256"):
+    with pytest.raises(ValueError, match="validated CorpusManifest"):
         produce(corpus_provenance=corpus(manifest_sha256=SHA_A))
-    with pytest.raises(ValueError, match="document_id_map_sha256"):
+    with pytest.raises(ValueError, match="validated CorpusManifest"):
         produce(corpus_provenance=corpus(document_id_map_sha256=SHA_A))
 
 
 def test_manifest_hashes_are_deterministic_and_sensitive():
     original = records()
-    assert compute_corpus_manifest_sha256(original) == compute_corpus_manifest_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        original
+    ) == compute_corpus_records_integrity_sha256(original)
     assert compute_document_id_map_sha256(original) == compute_document_id_map_sha256(original)
 
     reordered = (
@@ -214,23 +279,48 @@ def test_manifest_hashes_are_deterministic_and_sensitive():
         original[2],
     )
     changed_text = (replace(original[0], text="Alpha text "), *original[1:])
+    changed_title = (
+        original[0],
+        replace(original[1], title="Other title"),
+        original[2],
+    )
+    changed_retrieval = (
+        replace(original[0], retrieval_content="Other prepared content"),
+        *original[1:],
+    )
     changed_source = (replace(original[0], source_document_id="other"), *original[1:])
     changed_id = (replace(original[0], document_id="other"), *original[1:])
 
-    assert compute_corpus_manifest_sha256(reordered) != compute_corpus_manifest_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        reordered
+    ) != compute_corpus_records_integrity_sha256(original)
     assert compute_document_id_map_sha256(reordered) != compute_document_id_map_sha256(original)
-    assert compute_corpus_manifest_sha256(changed_text) != compute_corpus_manifest_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        changed_text
+    ) != compute_corpus_records_integrity_sha256(original)
     assert compute_document_id_map_sha256(changed_text) == compute_document_id_map_sha256(original)
-    assert compute_corpus_manifest_sha256(changed_source) != compute_corpus_manifest_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        changed_title
+    ) != compute_corpus_records_integrity_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        changed_retrieval
+    ) != compute_corpus_records_integrity_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        changed_source
+    ) != compute_corpus_records_integrity_sha256(original)
     assert compute_document_id_map_sha256(changed_source) == compute_document_id_map_sha256(original)
-    assert compute_corpus_manifest_sha256(changed_id) != compute_corpus_manifest_sha256(original)
+    assert compute_corpus_records_integrity_sha256(
+        changed_id
+    ) != compute_corpus_records_integrity_sha256(original)
     assert compute_document_id_map_sha256(changed_id) != compute_document_id_map_sha256(original)
 
 
 def test_manifest_preserves_integer_and_string_id_types():
-    integer = (CorpusRecord(1, None, "text", 0),)
-    string = (CorpusRecord("1", None, "text", 0),)
-    assert compute_corpus_manifest_sha256(integer) != compute_corpus_manifest_sha256(string)
+    integer = (CorpusRecord(1, 2, None, "text", "text", 0),)
+    string = (CorpusRecord("1", "2", None, "text", "text", 0),)
+    assert compute_corpus_records_integrity_sha256(
+        integer
+    ) != compute_corpus_records_integrity_sha256(string)
     assert compute_document_id_map_sha256(integer) != compute_document_id_map_sha256(string)
 
 
@@ -279,7 +369,7 @@ def test_neutral_bm25_config_has_no_cross_layer_imports():
 def test_index_fingerprint_changes_with_bm25_configuration(change):
     corpus_records = records()
     base = dict(
-        corpus_manifest_sha256=compute_corpus_manifest_sha256(corpus_records),
+        corpus_manifest_sha256=manifest(corpus_records).sha256,
         document_id_map_sha256=compute_document_id_map_sha256(corpus_records),
         library_version="0.2.2",
     )
@@ -290,7 +380,7 @@ def test_index_fingerprint_changes_with_bm25_configuration(change):
 def test_index_fingerprint_changes_with_corpus_binding():
     corpus_records = records()
     base = dict(
-        corpus_manifest_sha256=compute_corpus_manifest_sha256(corpus_records),
+        corpus_manifest_sha256=manifest(corpus_records).sha256,
         document_id_map_sha256=compute_document_id_map_sha256(corpus_records),
         library_version="0.2.2",
     )
