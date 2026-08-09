@@ -38,6 +38,9 @@ from retrieval_artifacts.sample_manifest import (
     query_text_sha256,
     verify_manifest_sample,
 )
+from retrieval_artifacts.runtime_corpus import (
+    bm25_runtime_documents_from_corpus_records,
+)
 
 __all__ = [
     "CANDIDATE_SCHEMA_VERSION",
@@ -70,4 +73,5 @@ __all__ = [
     "dataset_provenance_from_sample_manifest",
     "query_text_sha256",
     "verify_manifest_sample",
+    "bm25_runtime_documents_from_corpus_records",
 ]

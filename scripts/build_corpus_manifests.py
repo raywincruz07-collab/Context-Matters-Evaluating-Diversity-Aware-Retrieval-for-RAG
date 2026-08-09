@@ -38,6 +38,8 @@ from retrieval_artifacts import (
     CorpusManifestEntry,
     CorpusRecord,
     SampleManifest,
+    CorpusProvenance,
+    DatasetProvenance,
     corpus_provenance_from_corpus_manifest,
     dataset_provenance_from_sample_manifest,
     document_content_sha256,
@@ -80,6 +82,12 @@ PUBMEDQA_HISTORICAL_ARTIFACT = REPOSITORY_ROOT / (
 PUBMEDQA_OUTPUT_PATH = REPOSITORY_ROOT / (
     "artifacts/corpus_manifests/pubmedqa_corpus_manifest_v1.json"
 )
+PUBMEDQA_CORPUS_MANIFEST_SHA256 = (
+    "e4a9d368c9b3d4270e6bcc721e2e0e8d807d47891ac6039d866ea1c6e44b2a43"
+)
+PUBMEDQA_CORPUS_MANIFEST_ID = (
+    f"corpus-manifest:sha256:{PUBMEDQA_CORPUS_MANIFEST_SHA256}"
+)
 _CANONICAL_DIGITS = re.compile(r"^(?:0|[1-9][0-9]*)$")
 
 
@@ -95,6 +103,15 @@ class HistoricalCompatibility:
     sample_count: int
     document_count: int
     gold_assignment_count: int
+
+
+@dataclass(frozen=True)
+class ValidatedPubMedQARuntimeCorpus:
+    sample_manifest: SampleManifest
+    corpus_manifest: CorpusManifest
+    corpus_records: tuple[CorpusRecord, ...]
+    dataset_provenance: DatasetProvenance
+    corpus_provenance: CorpusProvenance
 
 
 def pubmedqa_section_source_document_id(
@@ -429,6 +446,79 @@ def read_and_verify_corpus_manifest_artifact(path: Path) -> CorpusManifest:
     if stored.get("corpus_manifest_sha256") != manifest.sha256:
         raise ValueError("stored corpus_manifest_sha256 does not match payload")
     return manifest
+
+
+def load_frozen_pubmedqa_corpus_manifest(path: Path) -> CorpusManifest:
+    """Load and verify the exact committed PubMedQA CorpusManifest artifact."""
+    manifest = read_and_verify_corpus_manifest_artifact(path)
+    expected = {
+        "dataset_id": DatasetId.PUBMEDQA,
+        "source": PUBMEDQA_SOURCE,
+        "config": PUBMEDQA_CONFIG,
+        "revision": PUBMEDQA_REVISION,
+        "split": PUBMEDQA_SPLIT,
+        "construction_algorithm": PUBMEDQA_CONSTRUCTION_ALGORITHM,
+        "corpus_manifest_id": PUBMEDQA_CORPUS_MANIFEST_ID,
+        "sha256": PUBMEDQA_CORPUS_MANIFEST_SHA256,
+        "document_count": PUBMEDQA_EXPECTED_DOCUMENT_COUNT,
+    }
+    for name, value in expected.items():
+        if getattr(manifest, name) != value:
+            raise ValueError(f"frozen PubMedQA CorpusManifest {name} mismatch")
+    return manifest
+
+
+def prepare_pubmedqa_runtime_corpus(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    sample_manifest: SampleManifest,
+    frozen_corpus_manifest: CorpusManifest,
+    expected_sample_count: int = PUBMEDQA_EXPECTED_SAMPLE_COUNT,
+    expected_document_count: int = PUBMEDQA_EXPECTED_DOCUMENT_COUNT,
+) -> ValidatedPubMedQARuntimeCorpus:
+    """Reconstruct PubMedQA and require exact frozen corpus identity."""
+    build = build_pubmedqa_corpus_manifest(
+        rows,
+        sample_manifest,
+        expected_sample_count=expected_sample_count,
+        expected_document_count=expected_document_count,
+    )
+    if build.corpus_manifest != frozen_corpus_manifest:
+        raise ValueError(
+            "reconstructed PubMedQA corpus does not match frozen CorpusManifest"
+        )
+    validate_corpus_records_against_manifest(
+        frozen_corpus_manifest, build.corpus_records
+    )
+    dataset_provenance = dataset_provenance_from_sample_manifest(sample_manifest)
+    corpus_provenance = corpus_provenance_from_corpus_manifest(
+        corpus_manifest=frozen_corpus_manifest,
+        corpus_records=build.corpus_records,
+        dataset_provenance=dataset_provenance,
+    )
+    return ValidatedPubMedQARuntimeCorpus(
+        sample_manifest=sample_manifest,
+        corpus_manifest=frozen_corpus_manifest,
+        corpus_records=build.corpus_records,
+        dataset_provenance=dataset_provenance,
+        corpus_provenance=corpus_provenance,
+    )
+
+
+def load_validated_pubmedqa_runtime_corpus(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    sample_manifest_path: Path = PUBMEDQA_SAMPLE_MANIFEST_PATH,
+    corpus_manifest_path: Path = PUBMEDQA_OUTPUT_PATH,
+) -> ValidatedPubMedQARuntimeCorpus:
+    """Load both committed manifests and validate already-loaded pinned rows."""
+    sample_manifest = load_frozen_pubmedqa_sample_manifest(sample_manifest_path)
+    corpus_manifest = load_frozen_pubmedqa_corpus_manifest(corpus_manifest_path)
+    return prepare_pubmedqa_runtime_corpus(
+        rows,
+        sample_manifest=sample_manifest,
+        frozen_corpus_manifest=corpus_manifest,
+    )
 
 
 def parse_args() -> argparse.Namespace:
