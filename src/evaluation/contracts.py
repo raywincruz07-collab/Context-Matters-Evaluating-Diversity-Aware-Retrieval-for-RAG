@@ -96,7 +96,7 @@ class RowIdentity:
     dataset_id: str
     dataset_split: str
     sample_id: str
-    retrieval_artifact_id: str
+    retrieval_artifact_id: str | None
     model_provider: str
     model_id: str
     model_revision: str | None
@@ -112,7 +112,6 @@ class RowIdentity:
             "dataset_id",
             "dataset_split",
             "sample_id",
-            "retrieval_artifact_id",
             "model_provider",
             "model_id",
         )
@@ -127,6 +126,18 @@ class RowIdentity:
             raise ValueError("model_revision must be None or a non-empty string")
         if not isinstance(self.context_mode, ContextMode):
             raise TypeError("context_mode must be a ContextMode")
+        if self.context_mode is ContextMode.WITH_CONTEXT:
+            if (
+                not isinstance(self.retrieval_artifact_id, str)
+                or not self.retrieval_artifact_id.strip()
+            ):
+                raise ValueError(
+                    "with_context identity requires a non-empty retrieval_artifact_id"
+                )
+        elif self.retrieval_artifact_id is not None:
+            raise ValueError(
+                "without_context identity requires retrieval_artifact_id=None"
+            )
         if (
             isinstance(self.generation_replica, (bool, np.bool_))
             or not isinstance(self.generation_replica, Integral)

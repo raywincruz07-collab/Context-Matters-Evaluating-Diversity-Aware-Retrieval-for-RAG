@@ -164,7 +164,6 @@ def test_row_identity_requires_exact_schema_version(schema_version):
         "dataset_id",
         "dataset_split",
         "sample_id",
-        "retrieval_artifact_id",
         "model_provider",
         "model_id",
     ],
@@ -178,6 +177,20 @@ def test_row_identity_rejects_empty_required_identifiers(field_name, empty_value
 def test_row_identity_allows_missing_model_revision():
     identity = _identity(model_revision=None)
     assert identity.model_revision is None
+
+
+def test_row_identity_enforces_context_specific_retrieval_artifact():
+    assert _identity().retrieval_artifact_id == "retrieval-001"
+    with pytest.raises(ValueError, match="with_context"):
+        _identity(retrieval_artifact_id=None)
+
+    without_context = _identity(
+        context_mode=ContextMode.WITHOUT_CONTEXT,
+        retrieval_artifact_id=None,
+    )
+    assert without_context.retrieval_artifact_id is None
+    with pytest.raises(ValueError, match="without_context"):
+        _identity(context_mode=ContextMode.WITHOUT_CONTEXT)
 
 
 @pytest.mark.parametrize("generation_replica", [0, 1, 12, np.int64(2)])
@@ -195,7 +208,17 @@ def test_logical_key_is_deterministic_and_tracks_pairing_dimensions():
     identity = _identity()
     assert identity.logical_key() == _identity().logical_key()
     assert identity.logical_key() != _identity(
-        context_mode=ContextMode.WITHOUT_CONTEXT
+        context_mode=ContextMode.WITHOUT_CONTEXT,
+        retrieval_artifact_id=None,
     ).logical_key()
     assert identity.logical_key() != _identity(model_id="model-b").logical_key()
     assert identity.logical_key() != _identity(sample_id="sample-002").logical_key()
+
+
+def test_no_context_logical_key_has_no_fake_retrieval_dependency():
+    identity = _identity(
+        context_mode=ContextMode.WITHOUT_CONTEXT,
+        retrieval_artifact_id=None,
+    )
+    assert identity.logical_key()[5] is None
+    assert "retrieval-001" not in identity.logical_key()
