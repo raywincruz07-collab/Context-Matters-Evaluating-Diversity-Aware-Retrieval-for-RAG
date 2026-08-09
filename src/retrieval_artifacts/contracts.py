@@ -180,7 +180,12 @@ class RetrieverProvenance:
 
 @dataclass(frozen=True)
 class CandidateArtifact:
-    """Successful raw retriever output before any diversification."""
+    """Successful raw retriever output before any diversification.
+
+    ``artifact_id`` identifies the scientific retrieval content and configuration.
+    ``production_fingerprint_sha256`` separately identifies the code, worktree,
+    and environment state that produced that scientific artifact.
+    """
 
     schema_version: str
     dataset: DatasetProvenance
@@ -221,13 +226,12 @@ class CandidateArtifact:
         document_ids = [entry.document_id for entry in self.candidates]
         if len(set(document_ids)) != len(document_ids):
             raise ValueError("candidate document_id values must be unique")
-        positions = [
-            entry.corpus_position
-            for entry in self.candidates
-            if entry.corpus_position is not None
-        ]
-        if len(set(positions)) != len(positions):
-            raise ValueError("present candidate corpus_position values must be unique")
+        positions = [entry.corpus_position for entry in self.candidates]
+        positions_present = [position is not None for position in positions]
+        if any(positions_present) and not all(positions_present):
+            raise ValueError("corpus_position must be present for all candidates or none")
+        if all(positions_present) and len(set(positions)) != len(positions):
+            raise ValueError("candidate corpus_position values must be unique")
         if not isinstance(self.producing_git_commit, str) or _GIT_SHA_RE.fullmatch(
             self.producing_git_commit
         ) is None:
@@ -238,8 +242,8 @@ class CandidateArtifact:
             self.environment_fingerprint_sha256, "environment_fingerprint_sha256"
         )
 
-    def canonical_payload(self) -> dict[str, Any]:
-        """Return the scientific hash payload, with exact float encodings."""
+    def scientific_payload(self) -> dict[str, Any]:
+        """Return scientific retrieval identity with exact float encodings."""
         return {
             "candidates": [
                 {
@@ -278,8 +282,6 @@ class CandidateArtifact:
                 "source": self.dataset.source,
                 "split": self.dataset.split,
             },
-            "environment_fingerprint_sha256": self.environment_fingerprint_sha256,
-            "producing_git_commit": self.producing_git_commit,
             "query_text": self.query_text,
             "requested_top_n": int(self.requested_top_n),
             "retriever": {
@@ -302,12 +304,11 @@ class CandidateArtifact:
             },
             "sample_id": _canonical_id(self.sample_id),
             "schema_version": self.schema_version,
-            "worktree_clean": self.worktree_clean,
         }
 
-    def canonical_json(self) -> str:
+    def scientific_json(self) -> str:
         return json.dumps(
-            self.canonical_payload(),
+            self.scientific_payload(),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -316,11 +317,35 @@ class CandidateArtifact:
 
     @property
     def sha256(self) -> str:
-        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()
+        return hashlib.sha256(self.scientific_json().encode("utf-8")).hexdigest()
 
     @property
     def artifact_id(self) -> str:
         return f"candidate:sha256:{self.sha256}"
+
+    def production_provenance_payload(self) -> dict[str, Any]:
+        """Return provenance identifying one production of this artifact."""
+        return {
+            "candidate_artifact_id": self.artifact_id,
+            "environment_fingerprint_sha256": self.environment_fingerprint_sha256,
+            "producing_git_commit": self.producing_git_commit,
+            "worktree_clean": self.worktree_clean,
+        }
+
+    def production_provenance_json(self) -> str:
+        return json.dumps(
+            self.production_provenance_payload(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    @property
+    def production_fingerprint_sha256(self) -> str:
+        return hashlib.sha256(
+            self.production_provenance_json().encode("utf-8")
+        ).hexdigest()
 
 
 @dataclass(frozen=True)

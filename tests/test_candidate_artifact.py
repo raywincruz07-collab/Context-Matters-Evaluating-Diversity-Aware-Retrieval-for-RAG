@@ -200,6 +200,22 @@ def test_candidate_artifact_candidate_invariants():
     assert len(artifact(requested_top_n=20).candidates) == 2
 
 
+def test_candidate_artifact_corpus_positions_are_all_present_or_all_absent():
+    present = artifact()
+    absent = artifact(
+        candidates=(
+            entry(corpus_position=None),
+            entry(2, "doc-2", corpus_position=None),
+        )
+    )
+    assert all(candidate.corpus_position is not None for candidate in present.candidates)
+    assert all(candidate.corpus_position is None for candidate in absent.candidates)
+    with pytest.raises(ValueError, match="all candidates or none"):
+        artifact(candidates=(entry(), entry(2, "doc-2", corpus_position=None)))
+    with pytest.raises(ValueError, match="must be unique"):
+        artifact(candidates=(entry(), entry(2, "doc-2", corpus_position=0)))
+
+
 def test_candidate_artifact_preserves_exact_query_and_records_dirty_worktree():
     value = artifact(worktree_clean=False)
     assert value.query_text == "  Exact query text?  "
@@ -208,11 +224,11 @@ def test_candidate_artifact_preserves_exact_query_and_records_dirty_worktree():
         artifact(producing_git_commit="1" * 39)
 
 
-def test_canonical_serialization_is_deterministic_and_type_stable():
+def test_scientific_serialization_is_deterministic_and_type_stable():
     value = artifact(sample_id=9, candidates=(entry(document_id=3),))
     assert value.artifact_id == value.artifact_id
     assert artifact().artifact_id == artifact().artifact_id
-    payload = json.loads(value.canonical_json())
+    payload = json.loads(value.scientific_json())
     assert payload["sample_id"] == 9
     assert payload["candidates"][0]["document_id"] == 3
     assert payload["candidates"][0]["native_score_hex"] == float(9.0).hex()
@@ -235,13 +251,41 @@ def test_canonical_serialization_is_deterministic_and_type_stable():
         lambda a: replace(a, retriever=replace(a.retriever, model_revision="new-model-revision")),
         lambda a: replace(a, retriever=replace(a.retriever, query_preprocessing="new preprocessing")),
         lambda a: replace(a, retriever=replace(a.retriever, index_fingerprint_sha256="c" * 64)),
-        lambda a: replace(a, producing_git_commit="2" * 40),
-        lambda a: replace(a, environment_fingerprint_sha256="c" * 64),
     ],
 )
 def test_artifact_id_changes_with_scientific_payload(changed):
     original = artifact()
     assert changed(original).artifact_id != original.artifact_id
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        lambda a: replace(a, producing_git_commit="2" * 40),
+        lambda a: replace(a, environment_fingerprint_sha256="c" * 64),
+        lambda a: replace(a, worktree_clean=False),
+    ],
+)
+def test_production_provenance_does_not_change_scientific_identity(changed):
+    original = artifact()
+    reproduced = changed(original)
+    assert reproduced.artifact_id == original.artifact_id
+    assert (
+        reproduced.production_fingerprint_sha256
+        != original.production_fingerprint_sha256
+    )
+
+
+def test_production_fingerprint_payload_binds_provenance_to_artifact():
+    value = artifact()
+    payload = json.loads(value.production_provenance_json())
+    assert payload == {
+        "candidate_artifact_id": value.artifact_id,
+        "environment_fingerprint_sha256": SHA_B,
+        "producing_git_commit": GIT_A,
+        "worktree_clean": True,
+    }
+    assert re.fullmatch(r"[0-9a-f]{64}", value.production_fingerprint_sha256)
 
 
 def test_embedding_reference_validation_and_exact_binding():
