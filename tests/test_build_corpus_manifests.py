@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -264,3 +265,22 @@ def test_core_builder_does_not_write_reserved_real_artifact():
     existed_before = PUBMEDQA_OUTPUT_PATH.exists()
     fixture_build()
     assert PUBMEDQA_OUTPUT_PATH.exists() is existed_before
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ("scripts/build_corpus_manifests.py", "--help"),
+        ("-m", "scripts.build_corpus_manifests", "--help"),
+    ),
+)
+def test_both_executable_entry_points_show_help_without_dataset_access(arguments):
+    result = subprocess.run(
+        (sys.executable, *arguments),
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout

@@ -26,6 +26,8 @@ import numpy as np
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPOSITORY_ROOT / "src"
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
