@@ -139,6 +139,10 @@ def test_pubmedqa_runtime_preparation_reuses_builder_and_derives_provenance():
     assert prepared.corpus_manifest == build.corpus_manifest
     assert prepared.dataset_provenance.sample_manifest_id == sample.manifest_id
     assert prepared.corpus_provenance.manifest_sha256 == build.corpus_manifest.sha256
+    assert tuple(query.sample_id for query in prepared.ordered_queries) == (0, 1)
+    assert tuple(query.query_text for query in prepared.ordered_queries) == (
+        "Exact fixture question?", "Other fixture question?"
+    )
 
 
 def test_pubmedqa_runtime_preparation_rejects_wrong_frozen_manifest():

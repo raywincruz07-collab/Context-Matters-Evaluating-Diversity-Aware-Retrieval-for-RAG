@@ -45,6 +45,7 @@ from retrieval_artifacts import (
     document_content_sha256,
     query_text_sha256,
     validate_corpus_records_against_manifest,
+    verify_manifest_sample,
 )
 from scripts.build_sample_manifests import read_and_verify_manifest_artifact
 
@@ -106,12 +107,52 @@ class HistoricalCompatibility:
 
 
 @dataclass(frozen=True)
+class ValidatedPubMedQAQuery:
+    position: int
+    sample_id: str | int
+    query_text: str
+
+
+@dataclass(frozen=True)
 class ValidatedPubMedQARuntimeCorpus:
     sample_manifest: SampleManifest
     corpus_manifest: CorpusManifest
     corpus_records: tuple[CorpusRecord, ...]
     dataset_provenance: DatasetProvenance
     corpus_provenance: CorpusProvenance
+    ordered_queries: tuple[ValidatedPubMedQAQuery, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.ordered_queries, tuple):
+            raise TypeError("ordered_queries must be an immutable tuple")
+        if len(self.ordered_queries) != self.sample_manifest.actual_sample_size:
+            raise ValueError("ordered queries do not cover the SampleManifest")
+        for entry, query in zip(
+            self.sample_manifest.entries, self.ordered_queries, strict=True
+        ):
+            if not isinstance(query, ValidatedPubMedQAQuery):
+                raise TypeError(
+                    "ordered_queries must contain ValidatedPubMedQAQuery objects"
+                )
+            if query.position != entry.position or query.sample_id != entry.sample_id:
+                raise ValueError("ordered query identity does not match SampleManifest")
+            verify_manifest_sample(
+                self.sample_manifest,
+                sample_id=query.sample_id,
+                query_text=query.query_text,
+            )
+        expected_dataset = dataset_provenance_from_sample_manifest(
+            self.sample_manifest
+        )
+        if self.dataset_provenance != expected_dataset:
+            raise ValueError("runtime DatasetProvenance does not match SampleManifest")
+        expected_corpus = corpus_provenance_from_corpus_manifest(
+            corpus_manifest=self.corpus_manifest,
+            corpus_records=self.corpus_records,
+            dataset_provenance=self.dataset_provenance,
+        )
+        if self.corpus_provenance != expected_corpus:
+            raise ValueError("runtime CorpusProvenance does not match corpus records")
 
 
 def pubmedqa_section_source_document_id(
@@ -477,8 +518,9 @@ def prepare_pubmedqa_runtime_corpus(
     expected_document_count: int = PUBMEDQA_EXPECTED_DOCUMENT_COUNT,
 ) -> ValidatedPubMedQARuntimeCorpus:
     """Reconstruct PubMedQA and require exact frozen corpus identity."""
+    ordered_rows = tuple(rows)
     build = build_pubmedqa_corpus_manifest(
-        rows,
+        ordered_rows,
         sample_manifest,
         expected_sample_count=expected_sample_count,
         expected_document_count=expected_document_count,
@@ -496,12 +538,26 @@ def prepare_pubmedqa_runtime_corpus(
         corpus_records=build.corpus_records,
         dataset_provenance=dataset_provenance,
     )
+    ordered_queries = []
+    for entry, row in zip(
+        sample_manifest.entries, ordered_rows, strict=True
+    ):
+        query_text = row["question"]
+        verify_manifest_sample(
+            sample_manifest,
+            sample_id=entry.sample_id,
+            query_text=query_text,
+        )
+        ordered_queries.append(
+            ValidatedPubMedQAQuery(entry.position, entry.sample_id, query_text)
+        )
     return ValidatedPubMedQARuntimeCorpus(
         sample_manifest=sample_manifest,
         corpus_manifest=frozen_corpus_manifest,
         corpus_records=build.corpus_records,
         dataset_provenance=dataset_provenance,
         corpus_provenance=corpus_provenance,
+        ordered_queries=tuple(ordered_queries),
     )
 
 
