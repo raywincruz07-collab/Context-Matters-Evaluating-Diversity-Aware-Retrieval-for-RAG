@@ -20,7 +20,7 @@ from evaluation.metric_registry import DatasetId
 from retrieval_artifacts.contracts import DatasetProvenance
 
 
-SAMPLE_MANIFEST_SCHEMA_VERSION = "sprint3.sample-manifest.v1"
+SAMPLE_MANIFEST_SCHEMA_VERSION = "sprint3.sample-manifest.v2"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -82,6 +82,23 @@ class SampleManifestEntry:
 
 
 @dataclass(frozen=True)
+class SampleSelectionDependency:
+    """One upstream source that determines sample eligibility or selection."""
+
+    role: str
+    source: str
+    config: str | None
+    revision: str
+    split: str
+
+    def __post_init__(self) -> None:
+        for name in ("role", "source", "revision", "split"):
+            _require_text(getattr(self, name), name)
+        if self.config is not None:
+            _require_text(self.config, "config")
+
+
+@dataclass(frozen=True)
 class SampleManifest:
     """Exact ordered sample population for one dataset split or subset."""
 
@@ -94,6 +111,7 @@ class SampleManifest:
     sampling_algorithm: str
     sampling_seed: int | None
     requested_sample_size: int | None
+    selection_dependencies: tuple[SampleSelectionDependency, ...]
     entries: tuple[SampleManifestEntry, ...]
 
     def __post_init__(self) -> None:
@@ -115,6 +133,17 @@ class SampleManifest:
             )
             if self.requested_sample_size == 0:
                 raise ValueError("requested_sample_size must be positive")
+        if not isinstance(self.selection_dependencies, tuple):
+            raise TypeError("selection_dependencies must be an immutable tuple")
+        if not all(
+            isinstance(dependency, SampleSelectionDependency)
+            for dependency in self.selection_dependencies
+        ):
+            raise TypeError(
+                "selection_dependencies must contain SampleSelectionDependency objects"
+            )
+        if len(set(self.selection_dependencies)) != len(self.selection_dependencies):
+            raise ValueError("selection_dependencies must not contain duplicates")
         if not isinstance(self.entries, tuple):
             raise TypeError("entries must be an immutable tuple")
         if not self.entries:
@@ -167,6 +196,16 @@ class SampleManifest:
                 None if self.sampling_seed is None else int(self.sampling_seed)
             ),
             "schema_version": self.schema_version,
+            "selection_dependencies": [
+                {
+                    "config": dependency.config,
+                    "revision": dependency.revision,
+                    "role": dependency.role,
+                    "source": dependency.source,
+                    "split": dependency.split,
+                }
+                for dependency in self.selection_dependencies
+            ],
             "source": self.source,
             "split": self.split,
         }

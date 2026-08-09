@@ -14,6 +14,7 @@ from retrieval_artifacts import (
     SAMPLE_MANIFEST_SCHEMA_VERSION,
     SampleManifest,
     SampleManifestEntry,
+    SampleSelectionDependency,
     dataset_provenance_from_sample_manifest,
     query_text_sha256,
     verify_manifest_sample,
@@ -31,6 +32,18 @@ def entry(position=0, sample_id="fixture-q1", query="Fixture question one?", **c
     return SampleManifestEntry(**values)
 
 
+def dependency(**changes):
+    values = dict(
+        role="fixture-eligibility",
+        source="synthetic-fixture-selection-source",
+        config="synthetic-fixture-config",
+        revision="fixture-selection-revision-abc",
+        split="fixture-selection-split",
+    )
+    values.update(changes)
+    return SampleSelectionDependency(**values)
+
+
 def manifest(**changes):
     values = dict(
         schema_version=SAMPLE_MANIFEST_SCHEMA_VERSION,
@@ -42,6 +55,7 @@ def manifest(**changes):
         sampling_algorithm="fixture-full-population-order-v1",
         sampling_seed=None,
         requested_sample_size=None,
+        selection_dependencies=(),
         entries=(
             entry(),
             entry(1, "fixture-q2", "Fixture question two?"),
@@ -66,6 +80,46 @@ def test_valid_sampled_manifest_with_seed():
     )
     assert value.sampling_seed == 42
     assert value.requested_sample_size == value.actual_sample_size == 2
+
+
+def test_valid_selection_dependency_is_frozen_and_empty_tuple_is_allowed():
+    value = dependency()
+    assert manifest().selection_dependencies == ()
+    with pytest.raises(FrozenInstanceError):
+        value.role = "changed"
+
+
+def test_selection_dependency_validation():
+    for field_name in ("role", "source", "revision", "split"):
+        with pytest.raises(ValueError):
+            dependency(**{field_name: " "})
+    with pytest.raises(ValueError):
+        dependency(config="")
+    assert dependency(config=None).config is None
+
+
+def test_selection_dependency_collection_validation():
+    value = dependency()
+    with pytest.raises(TypeError, match="immutable tuple"):
+        manifest(selection_dependencies=[value])
+    with pytest.raises(TypeError, match="SampleSelectionDependency"):
+        manifest(selection_dependencies=("not-a-dependency",))
+    with pytest.raises(ValueError, match="duplicates"):
+        manifest(selection_dependencies=(value, value))
+
+
+def test_selection_dependency_is_structured_in_scientific_payload():
+    value = dependency()
+    payload = manifest(selection_dependencies=(value,)).scientific_payload()
+    assert payload["selection_dependencies"] == [
+        {
+            "role": value.role,
+            "source": value.source,
+            "config": value.config,
+            "revision": value.revision,
+            "split": value.split,
+        }
+    ]
 
 
 def test_manifest_and_entries_are_frozen_and_entries_require_tuple():
@@ -131,6 +185,35 @@ def test_manifest_identity_is_deterministic_and_well_formed():
     assert manifest().manifest_id == manifest().manifest_id
     assert manifest().scientific_json() == manifest().scientific_json()
     assert re.fullmatch(r"sample-manifest:sha256:[0-9a-f]{64}", manifest().manifest_id)
+    with_dependency = dict(selection_dependencies=(dependency(),))
+    assert manifest(**with_dependency).manifest_id == manifest(**with_dependency).manifest_id
+
+
+@pytest.mark.parametrize(
+    "changed_dependency",
+    [
+        lambda value: replace(value, role="fixture-other-role"),
+        lambda value: replace(value, source="synthetic-fixture-other-source"),
+        lambda value: replace(value, config="synthetic-fixture-other-config"),
+        lambda value: replace(value, revision="fixture-selection-revision-def"),
+        lambda value: replace(value, split="fixture-selection-other-split"),
+    ],
+)
+def test_dependency_presence_and_fields_change_manifest_identity(changed_dependency):
+    original = manifest()
+    value = dependency()
+    with_dependency = manifest(selection_dependencies=(value,))
+    changed = manifest(selection_dependencies=(changed_dependency(value),))
+    assert with_dependency.manifest_id != original.manifest_id
+    assert changed.manifest_id != with_dependency.manifest_id
+
+
+def test_dependency_order_changes_manifest_identity():
+    first = dependency(role="fixture-first")
+    second = dependency(role="fixture-second")
+    assert manifest(selection_dependencies=(first, second)).manifest_id != manifest(
+        selection_dependencies=(second, first)
+    ).manifest_id
 
 
 def test_entry_order_changes_manifest_identity():
@@ -179,6 +262,8 @@ def test_integer_and_string_sample_ids_have_distinct_identity():
 
 def test_manifest_field_validation():
     with pytest.raises(ValueError):
+        manifest(schema_version="sprint3.sample-manifest.v1")
+    with pytest.raises(ValueError):
         manifest(schema_version="fixture-wrong-schema")
     with pytest.raises(TypeError):
         manifest(dataset_id="pubmedqa")
@@ -217,6 +302,20 @@ def test_dataset_provenance_builder_maps_every_field_exactly():
     assert provenance.sampling_algorithm == value.sampling_algorithm
 
 
+def test_dataset_provenance_is_bound_to_selection_dependencies():
+    original = manifest()
+    changed = manifest(selection_dependencies=(dependency(),))
+    original_provenance = dataset_provenance_from_sample_manifest(original)
+    changed_provenance = dataset_provenance_from_sample_manifest(changed)
+    assert changed_provenance.sample_manifest_id == changed.manifest_id
+    assert changed_provenance.sample_manifest_sha256 == changed.sha256
+    assert changed_provenance.sample_manifest_id != original_provenance.sample_manifest_id
+    assert (
+        changed_provenance.sample_manifest_sha256
+        != original_provenance.sample_manifest_sha256
+    )
+
+
 def test_verify_manifest_sample_accepts_exact_query():
     value = manifest()
     found = verify_manifest_sample(
@@ -240,16 +339,17 @@ def test_verify_manifest_sample_rejects_unknown_id_and_changed_query():
 
 
 def test_manifest_has_no_downstream_experiment_fields():
-    fields = SampleManifest.__dataclass_fields__
-    for forbidden in (
-        "retriever",
-        "diversification_condition",
-        "model_id",
-        "context_mode",
-        "generation",
-        "metric_id",
-        "timestamp",
-        "environment",
-        "git_commit",
-    ):
-        assert forbidden not in fields
+    for contract in (SampleManifest, SampleSelectionDependency):
+        fields = contract.__dataclass_fields__
+        for forbidden in (
+            "retriever",
+            "diversification_condition",
+            "model_id",
+            "context_mode",
+            "generation",
+            "metric_id",
+            "timestamp",
+            "environment",
+            "git_commit",
+        ):
+            assert forbidden not in fields
