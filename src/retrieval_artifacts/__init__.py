@@ -20,6 +20,14 @@ from retrieval_artifacts.producer import (
     produce_bm25_candidate_artifact,
     validate_bm25_index_binding,
 )
+from retrieval_artifacts.sample_manifest import (
+    SAMPLE_MANIFEST_SCHEMA_VERSION,
+    SampleManifest,
+    SampleManifestEntry,
+    dataset_provenance_from_sample_manifest,
+    query_text_sha256,
+    verify_manifest_sample,
+)
 
 __all__ = [
     "CANDIDATE_SCHEMA_VERSION",
@@ -38,4 +46,10 @@ __all__ = [
     "document_content_sha256",
     "produce_bm25_candidate_artifact",
     "validate_bm25_index_binding",
+    "SAMPLE_MANIFEST_SCHEMA_VERSION",
+    "SampleManifest",
+    "SampleManifestEntry",
+    "dataset_provenance_from_sample_manifest",
+    "query_text_sha256",
+    "verify_manifest_sample",
 ]
