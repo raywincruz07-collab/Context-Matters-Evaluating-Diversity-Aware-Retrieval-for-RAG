@@ -15,6 +15,13 @@ from retrieval_artifacts.corpus_manifest import (
     CorpusManifest,
     CorpusManifestEntry,
 )
+from retrieval_artifacts.dpr_cache_identity import (
+    DPR_CACHE_IDENTITY_SCHEMA_VERSION,
+    DPRCacheIdentity,
+    build_dpr_cache_identity,
+    dpr_embedding_cache_filename,
+    dpr_faiss_cache_filename,
+)
 from retrieval_artifacts.producer import (
     CorpusRecord,
     RawCandidateResult,
@@ -62,6 +69,11 @@ __all__ = [
     "CorpusConstructionDependency",
     "CorpusManifest",
     "CorpusManifestEntry",
+    "DPR_CACHE_IDENTITY_SCHEMA_VERSION",
+    "DPRCacheIdentity",
+    "build_dpr_cache_identity",
+    "dpr_embedding_cache_filename",
+    "dpr_faiss_cache_filename",
     "CorpusRecord",
     "RawCandidateResult",
     "build_bm25_retriever_provenance",
