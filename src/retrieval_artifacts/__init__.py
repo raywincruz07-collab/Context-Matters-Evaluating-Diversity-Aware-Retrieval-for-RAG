@@ -22,6 +22,13 @@ from retrieval_artifacts.dpr_cache_identity import (
     dpr_embedding_cache_filename,
     dpr_faiss_cache_filename,
 )
+from retrieval_artifacts.contriever_cache_identity import (
+    CONTRIEVER_CACHE_IDENTITY_SCHEMA_VERSION,
+    ContrieverCacheIdentity,
+    build_contriever_cache_identity,
+    contriever_embedding_cache_filename,
+    contriever_faiss_cache_filename,
+)
 from retrieval_artifacts.producer import (
     CorpusRecord,
     RawCandidateResult,
@@ -78,6 +85,11 @@ __all__ = [
     "build_dpr_cache_identity",
     "dpr_embedding_cache_filename",
     "dpr_faiss_cache_filename",
+    "CONTRIEVER_CACHE_IDENTITY_SCHEMA_VERSION",
+    "ContrieverCacheIdentity",
+    "build_contriever_cache_identity",
+    "contriever_embedding_cache_filename",
+    "contriever_faiss_cache_filename",
     "CorpusRecord",
     "RawCandidateResult",
     "build_bm25_retriever_provenance",
