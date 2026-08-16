@@ -22,3 +22,9 @@ data/hotpot_beir_qa_pairs.json
 
 # Local Python virtual environment
 .venv/
+
+# Local Claude tooling state is not scientific repository input.
+.claude/
+
+# Generated per-query candidate outputs are resumable runtime artifacts.
+artifacts/candidates/
