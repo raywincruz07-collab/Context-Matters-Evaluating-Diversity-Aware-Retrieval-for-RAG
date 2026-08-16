@@ -252,14 +252,9 @@ class OriginalDPRRetriever(BaseRetriever):
         faiss_path = os.path.join(INDEX_DIR, identity.faiss_cache_filename)
         metadata_path = os.path.join(INDEX_DIR, f"dpr_cache_{fingerprint}.json")
 
-        self.corpus = runtime_documents
-        self.cache_identity = identity
-        self.embedding_cache_path = embedding_path
-        self.faiss_cache_path = faiss_path
-        self.cache_metadata_path = metadata_path
-
         cached = self._load_validated_cache(
             corpus_manifest=corpus_manifest,
+            cache_identity=identity,
             embedding_path=embedding_path,
             faiss_path=faiss_path,
             metadata_path=metadata_path,
@@ -274,21 +269,44 @@ class OriginalDPRRetriever(BaseRetriever):
             self._validate_faiss_index(
                 index, document_count=corpus_manifest.document_count
             )
-            self._write_cache_pair(
-                corpus_manifest=corpus_manifest,
-                embeddings=embeddings,
-                index=index,
-                embedding_path=embedding_path,
-                faiss_path=faiss_path,
-                metadata_path=metadata_path,
+            embedding_artifact_sha256, index_artifact_sha256 = (
+                self._write_cache_pair(
+                    corpus_manifest=corpus_manifest,
+                    cache_identity=identity,
+                    embeddings=embeddings,
+                    index=index,
+                    embedding_path=embedding_path,
+                    faiss_path=faiss_path,
+                    metadata_path=metadata_path,
+                )
             )
-            self.faiss_index = index
+            new_index = index
         else:
-            _, self.faiss_index, metadata = cached
-            self.embedding_artifact_sha256 = metadata["embedding"]["sha256"]
-            self.index_artifact_sha256 = metadata["faiss"]["sha256"]
+            _, new_index, metadata = cached
+            embedding_artifact_sha256 = metadata["embedding"]["sha256"]
+            index_artifact_sha256 = metadata["faiss"]["sha256"]
 
-        self.is_indexed = True
+        (
+            self.corpus,
+            self.cache_identity,
+            self.embedding_cache_path,
+            self.faiss_cache_path,
+            self.cache_metadata_path,
+            self.faiss_index,
+            self.embedding_artifact_sha256,
+            self.index_artifact_sha256,
+            self.is_indexed,
+        ) = (
+            runtime_documents,
+            identity,
+            embedding_path,
+            faiss_path,
+            metadata_path,
+            new_index,
+            embedding_artifact_sha256,
+            index_artifact_sha256,
+            True,
+        )
 
     def _validate_embeddings(self, embeddings, *, document_count: int) -> None:
         if not isinstance(embeddings, np.ndarray):
@@ -322,19 +340,25 @@ class OriginalDPRRetriever(BaseRetriever):
             "transformers_version": _package_version("transformers"),
         }
 
-    def _expected_metadata_binding(self, corpus_manifest) -> dict:
+    def _expected_metadata_binding(self, corpus_manifest, *, cache_identity) -> dict:
         return {
-            "cache_fingerprint_sha256": self.cache_identity.fingerprint_sha256,
-            "cache_identity_schema_version": self.cache_identity.schema_version,
+            "cache_fingerprint_sha256": cache_identity.fingerprint_sha256,
+            "cache_identity_schema_version": cache_identity.schema_version,
             "cache_schema_version": DPR_CACHE_METADATA_SCHEMA_VERSION,
             "corpus_manifest_id": corpus_manifest.corpus_manifest_id,
             "corpus_manifest_sha256": corpus_manifest.sha256,
             "dpr_scientific_json": self.config.scientific_json(),
-            "scientific_payload": self.cache_identity.scientific_payload(),
+            "scientific_payload": cache_identity.scientific_payload(),
         }
 
     def _load_validated_cache(
-        self, *, corpus_manifest, embedding_path, faiss_path, metadata_path
+        self,
+        *,
+        corpus_manifest,
+        cache_identity,
+        embedding_path,
+        faiss_path,
+        metadata_path,
     ):
         if not all(os.path.isfile(path) for path in (metadata_path, embedding_path, faiss_path)):
             return None
@@ -344,7 +368,7 @@ class OriginalDPRRetriever(BaseRetriever):
             if not isinstance(metadata, dict):
                 return None
             for key, value in self._expected_metadata_binding(
-                corpus_manifest
+                corpus_manifest, cache_identity=cache_identity
             ).items():
                 if metadata.get(key) != value:
                     return None
@@ -393,18 +417,21 @@ class OriginalDPRRetriever(BaseRetriever):
         self,
         *,
         corpus_manifest,
+        cache_identity,
         embeddings,
         index,
         embedding_path,
         faiss_path,
         metadata_path,
-    ) -> None:
+    ) -> tuple[str, str]:
         self._write_numpy_atomically(embedding_path, embeddings)
         self._write_faiss_atomically(faiss_path, index)
         embedding_sha256 = _physical_sha256(embedding_path)
         index_sha256 = _physical_sha256(faiss_path)
         metadata = {
-            **self._expected_metadata_binding(corpus_manifest),
+            **self._expected_metadata_binding(
+                corpus_manifest, cache_identity=cache_identity
+            ),
             "embedding": {
                 "document_count": corpus_manifest.document_count,
                 "dtype": self.config.embedding_dtype,
@@ -423,8 +450,7 @@ class OriginalDPRRetriever(BaseRetriever):
             },
         }
         self._write_json_atomically(metadata_path, metadata)
-        self.embedding_artifact_sha256 = embedding_sha256
-        self.index_artifact_sha256 = index_sha256
+        return embedding_sha256, index_sha256
 
     @staticmethod
     def _write_numpy_atomically(path: str, embeddings: np.ndarray) -> None:

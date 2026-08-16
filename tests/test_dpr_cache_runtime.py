@@ -225,6 +225,11 @@ def test_valid_cache_hit_bypasses_encoding(monkeypatch):
         "_encode_contexts",
         lambda documents: pytest.fail("valid cache must bypass model encoding"),
     )
+    monkeypatch.setattr(
+        fresh,
+        "_load_models",
+        lambda: pytest.fail("valid cache must bypass model loading"),
+    )
     fresh.index_from_corpus_records(
         corpus_manifest=manifest, corpus_records=records
     )
@@ -329,7 +334,7 @@ def test_nonfinite_new_embeddings_fail_without_metadata(monkeypatch):
             corpus_manifest=corpus_manifest(), corpus_records=corpus_records()
         )
     assert calls
-    assert not Path(retriever.cache_metadata_path).exists()
+    assert retriever.cache_metadata_path is None
 
 
 def test_metadata_is_written_last_and_incomplete_pair_is_not_trusted(monkeypatch):
@@ -345,9 +350,24 @@ def test_metadata_is_written_last_and_incomplete_pair_is_not_trusted(monkeypatch
         retriever.index_from_corpus_records(
             corpus_manifest=corpus_manifest(), corpus_records=corpus_records()
         )
-    assert Path(retriever.embedding_cache_path).is_file()
-    assert Path(retriever.faiss_cache_path).is_file()
-    assert not Path(retriever.cache_metadata_path).exists()
+    identity = dpr_module.build_dpr_cache_identity(
+        corpus_manifest=corpus_manifest(),
+        dpr_config=DPR_CONFIG,
+    )
+    embedding_path = Path(dpr_module.EMBEDDINGS_DIR) / (
+        identity.embedding_cache_filename
+    )
+    faiss_path = Path(dpr_module.INDEX_DIR) / identity.faiss_cache_filename
+    metadata_path = Path(dpr_module.INDEX_DIR) / (
+        f"dpr_cache_{identity.fingerprint_sha256}.json"
+    )
+    assert embedding_path.is_file()
+    assert faiss_path.is_file()
+    assert not metadata_path.exists()
+    assert retriever.corpus is None
+    assert retriever.cache_identity is None
+    assert retriever.faiss_index is None
+    assert retriever.is_indexed is False
 
     fresh = OriginalDPRRetriever()
     fresh_calls = []
@@ -395,3 +415,174 @@ def test_cached_and_fresh_indexes_preserve_scores_order_and_nonpositive_values(
     assert [document["doc_id"] for document, _ in actual] == [0, "one", 2]
     assert [score for _, score in actual] == [1.0, 0.0, -1.0]
     assert actual == expected
+
+
+def corpus_records_b():
+    return (
+        CorpusRecord("b-0", "source-b-0", None, "stored B0", "B positive", 0),
+        CorpusRecord("b-1", "source-b-1", None, "stored B1", "B negative", 1),
+    )
+
+
+def synthetic_embeddings_b():
+    values = np.zeros((2, DPR_CONFIG.embedding_dimension), dtype=np.float32)
+    values[0, 0] = 2.0
+    values[1, 0] = -2.0
+    return values
+
+
+def state_snapshot(retriever):
+    return (
+        retriever.corpus,
+        retriever.cache_identity,
+        retriever.embedding_cache_path,
+        retriever.faiss_cache_path,
+        retriever.cache_metadata_path,
+        retriever.faiss_index,
+        retriever.embedding_artifact_sha256,
+        retriever.index_artifact_sha256,
+        retriever.is_indexed,
+    )
+
+
+def assert_a_retrieval_still_works(monkeypatch, retriever):
+    query = np.zeros((1, DPR_CONFIG.embedding_dimension), dtype=np.float32)
+    query[0, 0] = 1.0
+    monkeypatch.setattr(retriever, "_encode_questions", lambda questions: query)
+    results = retriever.retrieve("query", top_k=1)
+    assert results[0][0]["doc_id"] == 0
+    assert results[0][1] == 1.0
+
+
+def test_same_instance_successfully_commits_complete_b_state(monkeypatch):
+    retriever, _, _, _ = build_cache(monkeypatch)
+    state_a = state_snapshot(retriever)
+    records_b = corpus_records_b()
+    manifest_b = corpus_manifest(records_b)
+    calls = []
+    install_fake_encoder(
+        monkeypatch, retriever, synthetic_embeddings_b(), calls
+    )
+    retriever.index_from_corpus_records(
+        corpus_manifest=manifest_b,
+        corpus_records=records_b,
+    )
+
+    assert calls == [("B positive", "B negative")]
+    assert retriever.corpus == [
+        {"doc_id": "b-0", "retrieval_content": "B positive"},
+        {"doc_id": "b-1", "retrieval_content": "B negative"},
+    ]
+    assert retriever.cache_identity == dpr_module.build_dpr_cache_identity(
+        corpus_manifest=manifest_b,
+        dpr_config=DPR_CONFIG,
+    )
+    assert retriever.embedding_cache_path != state_a[2]
+    assert retriever.faiss_cache_path != state_a[3]
+    assert retriever.cache_metadata_path != state_a[4]
+    assert retriever.faiss_index is not state_a[5]
+    assert retriever.faiss_index.ntotal == 2
+    assert retriever.embedding_artifact_sha256 != state_a[6]
+    assert retriever.index_artifact_sha256 != state_a[7]
+    assert retriever.is_indexed is True
+
+    query = np.zeros((1, DPR_CONFIG.embedding_dimension), dtype=np.float32)
+    query[0, 0] = 1.0
+    monkeypatch.setattr(retriever, "_encode_questions", lambda questions: query)
+    assert retriever.retrieve("query", top_k=1)[0][0]["doc_id"] == "b-0"
+
+
+def test_same_instance_context_encoding_failure_preserves_a(monkeypatch):
+    retriever, _, _, _ = build_cache(monkeypatch)
+    state_a = state_snapshot(retriever)
+    records_b = corpus_records_b()
+    monkeypatch.setattr(
+        retriever,
+        "_encode_contexts",
+        lambda documents: (_ for _ in ()).throw(RuntimeError("encoding failed")),
+    )
+    with pytest.raises(RuntimeError, match="encoding failed"):
+        retriever.index_from_corpus_records(
+            corpus_manifest=corpus_manifest(records_b),
+            corpus_records=records_b,
+        )
+    assert state_snapshot(retriever) == state_a
+    assert_a_retrieval_still_works(monkeypatch, retriever)
+
+
+def test_same_instance_artifact_write_failure_preserves_a(monkeypatch):
+    retriever, _, _, _ = build_cache(monkeypatch)
+    state_a = state_snapshot(retriever)
+    records_b = corpus_records_b()
+    install_fake_encoder(monkeypatch, retriever, synthetic_embeddings_b(), [])
+    monkeypatch.setattr(
+        retriever,
+        "_write_cache_pair",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("artifact failed")),
+    )
+    with pytest.raises(RuntimeError, match="artifact failed"):
+        retriever.index_from_corpus_records(
+            corpus_manifest=corpus_manifest(records_b),
+            corpus_records=records_b,
+        )
+    assert state_snapshot(retriever) == state_a
+    assert_a_retrieval_still_works(monkeypatch, retriever)
+
+
+def test_same_instance_metadata_failure_preserves_a_then_retry_commits_b(
+    monkeypatch,
+):
+    retriever, _, _, _ = build_cache(monkeypatch)
+    state_a = state_snapshot(retriever)
+    records_b = corpus_records_b()
+    manifest_b = corpus_manifest(records_b)
+    install_fake_encoder(monkeypatch, retriever, synthetic_embeddings_b(), [])
+    original_writer = retriever._write_json_atomically
+    monkeypatch.setattr(
+        retriever,
+        "_write_json_atomically",
+        lambda path, metadata: (_ for _ in ()).throw(RuntimeError("metadata failed")),
+    )
+    with pytest.raises(RuntimeError, match="metadata failed"):
+        retriever.index_from_corpus_records(
+            corpus_manifest=manifest_b,
+            corpus_records=records_b,
+        )
+    assert state_snapshot(retriever) == state_a
+    assert_a_retrieval_still_works(monkeypatch, retriever)
+
+    monkeypatch.setattr(retriever, "_write_json_atomically", original_writer)
+    install_fake_encoder(monkeypatch, retriever, synthetic_embeddings_b(), [])
+    retriever.index_from_corpus_records(
+        corpus_manifest=manifest_b,
+        corpus_records=records_b,
+    )
+    assert retriever.corpus[0]["doc_id"] == "b-0"
+    assert retriever.cache_identity == dpr_module.build_dpr_cache_identity(
+        corpus_manifest=manifest_b,
+        dpr_config=DPR_CONFIG,
+    )
+    assert retriever.faiss_index.ntotal == 2
+    assert retriever.is_indexed is True
+
+
+def test_first_index_failure_preserves_initial_unindexed_state(monkeypatch):
+    retriever = OriginalDPRRetriever()
+    initial = state_snapshot(retriever)
+    monkeypatch.setattr(
+        retriever,
+        "_encode_contexts",
+        lambda documents: (_ for _ in ()).throw(RuntimeError("encoding failed")),
+    )
+    with pytest.raises(RuntimeError, match="encoding failed"):
+        retriever.index_from_corpus_records(
+            corpus_manifest=corpus_manifest(),
+            corpus_records=corpus_records(),
+        )
+    assert state_snapshot(retriever) == initial
+    assert retriever.corpus is None
+    assert retriever.faiss_index is None
+    assert retriever.cache_identity is None
+    assert retriever.embedding_artifact_sha256 is None
+    assert retriever.index_artifact_sha256 is None
+    assert retriever.is_indexed is False
