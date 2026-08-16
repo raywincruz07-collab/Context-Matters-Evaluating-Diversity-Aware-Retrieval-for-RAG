@@ -609,3 +609,109 @@ def produce_bm25_candidate_artifact(
         worktree_clean=worktree_clean,
         environment_fingerprint_sha256=environment_fingerprint_sha256,
     )
+
+
+def produce_dpr_candidate_artifact(
+    *,
+    sample_manifest: SampleManifest,
+    dataset_provenance: DatasetProvenance,
+    corpus_manifest: CorpusManifest,
+    corpus_provenance: CorpusProvenance,
+    cache_identity: DPRCacheIdentity,
+    sample_id: str | int,
+    query_text: str,
+    retriever_provenance: RetrieverProvenance,
+    requested_top_n: int,
+    raw_results: Sequence[RawCandidateResult],
+    corpus_records: tuple[CorpusRecord, ...],
+    producing_git_commit: str,
+    worktree_clean: bool,
+    environment_fingerprint_sha256: str,
+    dpr_config: DPRConfig = DPR_CONFIG,
+) -> CandidateArtifact:
+    """Validate and freeze already-returned raw DPR retrieval results."""
+    if not isinstance(sample_manifest, SampleManifest):
+        raise TypeError("sample_manifest must be a SampleManifest")
+    if not isinstance(dataset_provenance, DatasetProvenance):
+        raise TypeError("dataset_provenance must be DatasetProvenance")
+    expected_dataset_provenance = dataset_provenance_from_sample_manifest(
+        sample_manifest
+    )
+    if dataset_provenance != expected_dataset_provenance:
+        raise ValueError(
+            "dataset_provenance does not match the supplied SampleManifest"
+        )
+    verify_manifest_sample(
+        sample_manifest,
+        sample_id=sample_id,
+        query_text=query_text,
+    )
+    if not isinstance(corpus_provenance, CorpusProvenance):
+        raise TypeError("corpus_provenance must be CorpusProvenance")
+    if not isinstance(retriever_provenance, RetrieverProvenance):
+        raise TypeError("retriever_provenance must be RetrieverProvenance")
+    records = _validated_corpus_records(corpus_records)
+    expected_corpus_provenance = corpus_provenance_from_corpus_manifest(
+        corpus_manifest=corpus_manifest,
+        corpus_records=records,
+        dataset_provenance=dataset_provenance,
+    )
+    if corpus_provenance != expected_corpus_provenance:
+        raise ValueError(
+            "corpus_provenance does not match the validated CorpusManifest"
+        )
+    validate_dpr_index_binding(
+        corpus_provenance=corpus_provenance,
+        retriever_provenance=retriever_provenance,
+        cache_identity=cache_identity,
+        dpr_config=dpr_config,
+    )
+
+    if isinstance(raw_results, (str, bytes)) or not isinstance(raw_results, Sequence):
+        raise TypeError("raw_results must be an ordered sequence")
+    results = tuple(raw_results)
+    if not results:
+        raise ValueError("raw_results must contain at least one result")
+    if not all(isinstance(result, RawCandidateResult) for result in results):
+        raise TypeError("raw_results must contain RawCandidateResult objects")
+    if len(results) > requested_top_n:
+        raise ValueError("raw result count cannot exceed requested_top_n")
+    result_ids = [result.document_id for result in results]
+    if len(set(result_ids)) != len(result_ids):
+        raise ValueError("raw result document_id values must be unique")
+
+    records_by_id = {record.document_id: record for record in records}
+    candidates = []
+    for rank, result in enumerate(results, start=1):
+        try:
+            record = records_by_id[result.document_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"raw result document_id is absent from corpus: {result.document_id!r}"
+            ) from exc
+        candidates.append(
+            CandidateEntry(
+                rank=rank,
+                document_id=record.document_id,
+                source_document_id=record.source_document_id,
+                corpus_position=record.corpus_position,
+                native_score=result.native_score,
+                document_content_sha256=document_content_sha256(
+                    record.retrieval_content
+                ),
+            )
+        )
+
+    return CandidateArtifact(
+        schema_version=CANDIDATE_SCHEMA_VERSION,
+        dataset=dataset_provenance,
+        corpus=corpus_provenance,
+        sample_id=sample_id,
+        query_text=query_text,
+        retriever=retriever_provenance,
+        requested_top_n=requested_top_n,
+        candidates=tuple(candidates),
+        producing_git_commit=producing_git_commit,
+        worktree_clean=worktree_clean,
+        environment_fingerprint_sha256=environment_fingerprint_sha256,
+    )
