@@ -184,7 +184,8 @@ def test_bm25_indexes_retrieval_content_not_stored_text(tmp_path, monkeypatch):
     retriever.index(documents)
     results = retriever.retrieve("unique retrieval phrase", top_k=3)
     assert results and results[0][0]["doc_id"] == 7
-    assert retriever.retrieve("wrong stored text", top_k=3) == []
+    absent_term_results = retriever.retrieve("wrong stored text", top_k=3)
+    assert [score for _, score in absent_term_results] == [0.0, 0.0, 0.0]
     assert "unique" in retriever.tokenized_corpus[0]
     assert "wrong" not in retriever.tokenized_corpus[0]
 

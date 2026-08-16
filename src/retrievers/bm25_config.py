@@ -22,7 +22,8 @@ class BM25Config:
     normalization: str = "none"
     score_semantics: str = "rank_bm25.BM25Okapi native get_scores score"
     ranking_semantics: str = (
-        "scores.argsort()[-top_k:][::-1]; retain only score > 0"
+        "native score descending; exact score ties by frozen corpus position "
+        "ascending; no score-sign filtering"
     )
     index_type: str = "in-memory rank_bm25.BM25Okapi"
 

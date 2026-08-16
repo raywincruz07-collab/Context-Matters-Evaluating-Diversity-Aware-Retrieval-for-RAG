@@ -3,6 +3,7 @@ from dataclasses import replace
 import os
 import pickle
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -234,11 +235,10 @@ def test_ranking_and_scores_match_explicit_rank_bm25_reference():
     )
     tokenized_query = "alpha beta".lower().split()
     scores = reference.get_scores(tokenized_query)
-    top_indices = scores.argsort()[-3:][::-1]
+    top_indices = np.lexsort((np.arange(len(scores)), -scores))[:3]
     expected = [
         (documents[index], float(scores[index]))
         for index in top_indices
-        if scores[index] > 0
     ]
     actual = retriever.retrieve("alpha beta", top_k=3)
 
@@ -250,10 +250,78 @@ def test_ranking_and_scores_match_explicit_rank_bm25_reference():
     )
 
 
-def test_nonpositive_scores_remain_filtered():
+def test_zero_scores_are_retained_in_corpus_position_order():
     retriever = BM25Retriever()
     retriever.index(corpus())
-    assert retriever.retrieve("term-absent-from-every-document", top_k=3) == []
+    results = retriever.retrieve("term-absent-from-every-document", top_k=3)
+    assert [document["doc_id"] for document, _ in results] == [1, "two", 3]
+    assert [score for _, score in results] == [0.0, 0.0, 0.0]
+
+
+def _retriever_with_scores(scores):
+    retriever = BM25Retriever()
+    retriever.corpus = [
+        {"doc_id": position, "text": f"document {position}"}
+        for position in range(len(scores))
+    ]
+    retriever.bm25 = SimpleNamespace(
+        get_scores=lambda _: np.asarray(scores, dtype=float)
+    )
+    retriever.is_indexed = True
+    return retriever
+
+
+def test_one_positive_score_plus_zero_tail_returns_exactly_twenty():
+    retriever = _retriever_with_scores([3.5, *([0.0] * 24)])
+    results = retriever.retrieve("query", top_k=20)
+    assert len(results) == 20
+    assert [document["doc_id"] for document, _ in results] == list(range(20))
+    assert [score for _, score in results] == [3.5, *([0.0] * 19)]
+
+
+def test_fourteen_positive_scores_plus_zero_tail_returns_exactly_twenty():
+    scores = [float(14 - position) for position in range(14)] + [0.0] * 11
+    results = _retriever_with_scores(scores).retrieve("query", top_k=20)
+    assert len(results) == 20
+    assert [document["doc_id"] for document, _ in results] == list(range(20))
+    assert [score for _, score in results][-6:] == [0.0] * 6
+
+
+def test_negative_scores_are_retained_when_they_rank_in_top_k():
+    scores = [-3.0, -1.0, -2.0, -1.0]
+    results = _retriever_with_scores(scores).retrieve("query", top_k=3)
+    assert [document["doc_id"] for document, _ in results] == [1, 3, 2]
+    assert [score for _, score in results] == [-1.0, -1.0, -2.0]
+
+
+def test_exact_score_ties_use_corpus_position_ascending_without_duplicates():
+    results = _retriever_with_scores([2.0, 4.0, 4.0, 2.0, 4.0]).retrieve(
+        "query", top_k=5
+    )
+    document_ids = [document["doc_id"] for document, _ in results]
+    assert document_ids == [1, 2, 4, 0, 3]
+    assert len(document_ids) == len(set(document_ids))
+
+
+def test_ranking_semantics_describes_implementation_and_changes_fingerprint():
+    expected = (
+        "native score descending; exact score ties by frozen corpus position "
+        "ascending; no score-sign filtering"
+    )
+    assert BM25_CONFIG.ranking_semantics == expected
+    assert BM25_CONFIG.scientific_payload()["ranking_semantics"] == expected
+
+    old_semantics = replace(
+        BM25_CONFIG,
+        ranking_semantics=(
+            "scores.argsort()[-top_k:][::-1]; retain only score > 0"
+        ),
+    )
+    current = BM25Retriever(BM25_CONFIG)
+    historical = BM25Retriever(old_semantics)
+    current.index(corpus())
+    historical.index(corpus())
+    assert current.runtime_index_fingerprint != historical.runtime_index_fingerprint
 
 
 def test_index_does_not_mutate_input_corpus():

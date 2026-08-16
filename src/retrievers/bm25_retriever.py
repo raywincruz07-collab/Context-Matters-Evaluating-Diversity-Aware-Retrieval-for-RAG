@@ -233,12 +233,10 @@ class BM25Retriever(BaseRetriever):
         tokenized_query = self._tokenize(query)
         scores = self.bm25.get_scores(tokenized_query)
 
-        # Get top-k indices
-        top_indices = scores.argsort()[-top_k:][::-1]
-
-        results = []
-        for idx in top_indices:
-            if scores[idx] > 0:
-                results.append((self.corpus[idx], float(scores[idx])))
-
-        return results
+        corpus_positions = np.arange(len(scores))
+        ranked_indices = np.lexsort((corpus_positions, -scores))
+        top_indices = ranked_indices[:top_k]
+        return [
+            (self.corpus[idx], float(scores[idx]))
+            for idx in top_indices
+        ]
