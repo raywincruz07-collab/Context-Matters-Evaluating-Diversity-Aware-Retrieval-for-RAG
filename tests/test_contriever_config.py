@@ -37,8 +37,7 @@ def test_every_frozen_contriever_field():
     assert CONTRIEVER_CONFIG.document_max_length == 512
     assert CONTRIEVER_CONFIG.truncation_enabled is True
     assert CONTRIEVER_CONFIG.truncation_semantics == (
-        "single-sequence truncation delegated to tokenizer/Transformers with "
-        "max_length=512"
+        "single-sequence truncation delegated to tokenizer/Transformers"
     )
     assert CONTRIEVER_CONFIG.padding_semantics == (
         "dynamic padding to longest encoded input in each batch"

@@ -154,8 +154,7 @@ CONTRIEVER_CONFIG = ContrieverConfig(
     document_max_length=512,
     truncation_enabled=True,
     truncation_semantics=(
-        "single-sequence truncation delegated to tokenizer/Transformers with "
-        "max_length=512"
+        "single-sequence truncation delegated to tokenizer/Transformers"
     ),
     padding_semantics="dynamic padding to longest encoded input in each batch",
     normalization="none",
