@@ -14,7 +14,9 @@ from typing import Any
 import numpy as np
 
 from retrievers.bm25_config import BM25_CONFIG, BM25Config
+from retrievers.contriever_config import CONTRIEVER_CONFIG, ContrieverConfig
 from retrievers.dpr_config import DPR_CONFIG, DPRConfig
+from retrieval_artifacts.contriever_cache_identity import ContrieverCacheIdentity
 from retrieval_artifacts.corpus_manifest import CorpusManifest
 from retrieval_artifacts.dpr_cache_identity import DPRCacheIdentity
 from retrieval_artifacts.contracts import (
@@ -500,6 +502,138 @@ def validate_dpr_index_binding(
         raise ValueError("DPR cache document count does not match corpus provenance")
     if retriever_provenance.index_artifact_sha256 is None:
         raise ValueError("DPR provenance requires a physical FAISS artifact SHA")
+    _require_sha256(
+        retriever_provenance.index_artifact_sha256,
+        "index_artifact_sha256",
+    )
+
+
+def build_contriever_retriever_provenance(
+    *,
+    cache_identity: ContrieverCacheIdentity,
+    index_artifact_sha256: str,
+    transformers_version: str,
+    contriever_config: ContrieverConfig = CONTRIEVER_CONFIG,
+) -> RetrieverProvenance:
+    """Build Contriever provenance from validated scientific primitives."""
+    if not isinstance(cache_identity, ContrieverCacheIdentity):
+        raise TypeError("cache_identity must be a ContrieverCacheIdentity")
+    if not isinstance(contriever_config, ContrieverConfig):
+        raise TypeError("contriever_config must be a ContrieverConfig")
+    if (
+        cache_identity.contriever_config.scientific_json()
+        != contriever_config.scientific_json()
+    ):
+        raise ValueError(
+            "cache_identity ContrieverConfig does not match contriever_config"
+        )
+    if not isinstance(transformers_version, str) or not transformers_version.strip():
+        raise ValueError("transformers_version must be a non-empty string")
+    _require_sha256(
+        cache_identity.fingerprint_sha256, "cache_identity fingerprint"
+    )
+    _require_sha256(index_artifact_sha256, "index_artifact_sha256")
+
+    return RetrieverProvenance(
+        retriever_name="contriever",
+        implementation="retrievers.contriever_retriever.ContrieverRetriever",
+        library_name="transformers",
+        library_version=transformers_version,
+        model_id=contriever_config.model_id,
+        model_revision=contriever_config.model_revision,
+        tokenizer_id=contriever_config.tokenizer_id,
+        tokenizer_revision=contriever_config.tokenizer_revision,
+        query_preprocessing=contriever_config.query_preprocessing,
+        document_preprocessing=contriever_config.document_preprocessing,
+        normalization=contriever_config.normalization,
+        score_semantics=contriever_config.score_semantics,
+        index_type=contriever_config.index_type,
+        index_config=contriever_config.scientific_json(),
+        index_fingerprint_sha256=cache_identity.fingerprint_sha256,
+        index_artifact_sha256=index_artifact_sha256,
+    )
+
+
+def validate_contriever_index_binding(
+    *,
+    corpus_provenance: CorpusProvenance,
+    retriever_provenance: RetrieverProvenance,
+    cache_identity: ContrieverCacheIdentity,
+    contriever_config: ContrieverConfig = CONTRIEVER_CONFIG,
+) -> None:
+    """Validate complete Contriever, corpus, and physical-index binding."""
+    if not isinstance(corpus_provenance, CorpusProvenance):
+        raise TypeError("corpus_provenance must be CorpusProvenance")
+    if not isinstance(retriever_provenance, RetrieverProvenance):
+        raise TypeError("retriever_provenance must be RetrieverProvenance")
+    if not isinstance(cache_identity, ContrieverCacheIdentity):
+        raise TypeError("cache_identity must be a ContrieverCacheIdentity")
+    if not isinstance(contriever_config, ContrieverConfig):
+        raise TypeError("contriever_config must be a ContrieverConfig")
+    if (
+        cache_identity.contriever_config.scientific_json()
+        != contriever_config.scientific_json()
+    ):
+        raise ValueError(
+            "cache_identity ContrieverConfig does not match contriever_config"
+        )
+
+    expected_fields = {
+        "retriever_name": "contriever",
+        "implementation": "retrievers.contriever_retriever.ContrieverRetriever",
+        "library_name": "transformers",
+        "model_id": contriever_config.model_id,
+        "model_revision": contriever_config.model_revision,
+        "tokenizer_id": contriever_config.tokenizer_id,
+        "tokenizer_revision": contriever_config.tokenizer_revision,
+        "query_preprocessing": contriever_config.query_preprocessing,
+        "document_preprocessing": contriever_config.document_preprocessing,
+        "normalization": contriever_config.normalization,
+        "score_semantics": contriever_config.score_semantics,
+        "index_type": contriever_config.index_type,
+        "index_fingerprint_sha256": cache_identity.fingerprint_sha256,
+    }
+    for name, expected in expected_fields.items():
+        if getattr(retriever_provenance, name) != expected:
+            raise ValueError(
+                f"Contriever retriever provenance {name} does not match"
+            )
+
+    try:
+        index_config = json.loads(retriever_provenance.index_config)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "Contriever index_config must be canonical ContrieverConfig JSON"
+        ) from exc
+    if not isinstance(index_config, dict):
+        raise ValueError("Contriever index_config must decode to a JSON object")
+    if index_config != contriever_config.scientific_payload():
+        raise ValueError(
+            "Contriever index_config does not preserve complete ContrieverConfig"
+        )
+    if retriever_provenance.index_config != contriever_config.scientific_json():
+        raise ValueError(
+            "Contriever index_config must be canonical ContrieverConfig JSON"
+        )
+
+    if (
+        cache_identity.corpus_manifest.sha256
+        != corpus_provenance.manifest_sha256
+    ):
+        raise ValueError(
+            "Contriever cache CorpusManifest SHA does not match corpus provenance"
+        )
+    if (
+        cache_identity.corpus_manifest.document_count
+        != corpus_provenance.document_count
+    ):
+        raise ValueError(
+            "Contriever cache document count does not match corpus provenance"
+        )
+    if retriever_provenance.index_artifact_sha256 is None:
+        raise ValueError(
+            "Contriever provenance requires a physical FAISS artifact SHA"
+        )
     _require_sha256(
         retriever_provenance.index_artifact_sha256,
         "index_artifact_sha256",

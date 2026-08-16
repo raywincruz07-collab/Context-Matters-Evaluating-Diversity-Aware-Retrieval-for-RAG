@@ -33,6 +33,7 @@ from retrieval_artifacts.producer import (
     CorpusRecord,
     RawCandidateResult,
     build_bm25_retriever_provenance,
+    build_contriever_retriever_provenance,
     build_dpr_retriever_provenance,
     compute_corpus_records_integrity_sha256,
     compute_document_id_map_sha256,
@@ -44,6 +45,7 @@ from retrieval_artifacts.producer import (
     validate_corpus_dataset_binding,
     validate_corpus_records_against_manifest,
     validate_bm25_index_binding,
+    validate_contriever_index_binding,
     validate_dpr_index_binding,
 )
 from retrieval_artifacts.sample_manifest import (
@@ -93,6 +95,7 @@ __all__ = [
     "CorpusRecord",
     "RawCandidateResult",
     "build_bm25_retriever_provenance",
+    "build_contriever_retriever_provenance",
     "build_dpr_retriever_provenance",
     "compute_corpus_records_integrity_sha256",
     "compute_document_id_map_sha256",
@@ -104,6 +107,7 @@ __all__ = [
     "validate_corpus_dataset_binding",
     "validate_corpus_records_against_manifest",
     "validate_bm25_index_binding",
+    "validate_contriever_index_binding",
     "validate_dpr_index_binding",
     "SAMPLE_MANIFEST_SCHEMA_VERSION",
     "SampleManifest",
