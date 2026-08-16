@@ -112,18 +112,6 @@ def test_payload_is_explicit_and_excludes_non_scientific_inputs():
     }.isdisjoint(payload)
 
 
-def test_git_path_and_timestamp_are_not_inputs_to_scientific_identity():
-    identity = build_dpr_cache_identity(corpus_manifest=corpus_manifest())
-    before = identity.fingerprint_sha256
-    irrelevant_production_values = {
-        "git_commit": "0" * 40,
-        "cache_path": "/different/machine/cache",
-        "timestamp": "2099-01-01T00:00:00Z",
-    }
-    assert irrelevant_production_values
-    assert identity.fingerprint_sha256 == before
-
-
 def test_fingerprint_and_cache_filenames_are_deterministic():
     identity = build_dpr_cache_identity(corpus_manifest=corpus_manifest())
     fingerprint = identity.fingerprint_sha256
@@ -148,6 +136,8 @@ def test_malformed_identity_inputs_fail_loudly():
         build_dpr_cache_identity(corpus_manifest="not-a-manifest")
     with pytest.raises(TypeError, match="dpr_config must be a DPRConfig"):
         build_dpr_cache_identity(corpus_manifest=manifest, dpr_config={})
+    with pytest.raises(ValueError, match="unsupported DPR cache identity schema"):
+        DPRCacheIdentity("sprint3.dpr-cache-identity.v2", manifest, DPR_CONFIG)
 
 
 def test_frozen_pubmedqa_manifest_has_stable_repeated_fingerprint():

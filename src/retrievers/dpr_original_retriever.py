@@ -1,8 +1,13 @@
 """Original DPR dual-encoder runtime backed by authoritative DPRConfig."""
 
 import gc
+import hashlib
+from importlib import metadata as importlib_metadata
+import json
 import os
+import platform
 from collections.abc import Mapping
+import tempfile
 from typing import Dict, List, Tuple
 
 import faiss
@@ -14,6 +19,28 @@ from transformers import AutoTokenizer, DPRContextEncoder, DPRQuestionEncoder
 from config import EMBEDDINGS_DIR, INDEX_DIR
 from retrievers import BaseRetriever
 from retrievers.dpr_config import DPR_CONFIG, DPRConfig
+from retrieval_artifacts.dpr_cache_identity import build_dpr_cache_identity
+from retrieval_artifacts.runtime_corpus import (
+    dpr_runtime_documents_from_corpus_records,
+)
+
+
+DPR_CACHE_METADATA_SCHEMA_VERSION = "sprint3.dpr-cache-metadata.v1"
+
+
+def _package_version(distribution: str) -> str | None:
+    try:
+        return importlib_metadata.version(distribution)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
+def _physical_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class OriginalDPRRetriever(BaseRetriever):
@@ -32,6 +59,12 @@ class OriginalDPRRetriever(BaseRetriever):
         self.faiss_index = None
         self.embedding_dim = config.embedding_dimension
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.cache_identity = None
+        self.embedding_cache_path = None
+        self.faiss_cache_path = None
+        self.cache_metadata_path = None
+        self.embedding_artifact_sha256 = None
+        self.index_artifact_sha256 = None
 
     def _validate_runtime_config(self) -> None:
         """Reject scientific modes this frozen DPR runtime does not implement."""
@@ -124,9 +157,10 @@ class OriginalDPRRetriever(BaseRetriever):
             with torch.no_grad():
                 emb = self._extract_representation(self.q_encoder(**inputs))
 
-            all_emb.append(
-                emb.cpu().numpy().astype(self.config.embedding_dtype, copy=False)
-            )
+            array = emb.cpu().numpy()
+            if array.dtype != np.dtype(self.config.embedding_dtype):
+                raise ValueError("DPR question embedding dtype does not match config")
+            all_emb.append(array)
 
         return np.vstack(all_emb)
 
@@ -174,9 +208,10 @@ class OriginalDPRRetriever(BaseRetriever):
             with torch.no_grad():
                 emb = self._extract_representation(self.ctx_encoder(**inputs))
 
-            all_emb.append(
-                emb.cpu().numpy().astype(self.config.embedding_dtype, copy=False)
-            )
+            array = emb.cpu().numpy()
+            if array.dtype != np.dtype(self.config.embedding_dtype):
+                raise ValueError("DPR context embedding dtype does not match config")
+            all_emb.append(array)
 
         return np.vstack(all_emb)
 
@@ -192,48 +227,272 @@ class OriginalDPRRetriever(BaseRetriever):
     # ------------------------------------------------------------------
 
     def index(self, corpus: List[Dict]):
-        self.corpus = corpus
+        raise ValueError(
+            "DPR indexing requires index_from_corpus_records() with a validated "
+            "CorpusManifest and CorpusRecords"
+        )
 
-        emb_path = os.path.join(EMBEDDINGS_DIR, "dpr_embeddings.npy")
-        idx_path = os.path.join(INDEX_DIR, "dpr_faiss.index")
-
+    def index_from_corpus_records(self, *, corpus_manifest, corpus_records) -> None:
+        """Build or reuse DPR caches only after exact manifest/record validation."""
+        runtime_documents = dpr_runtime_documents_from_corpus_records(
+            corpus_manifest=corpus_manifest,
+            corpus_records=corpus_records,
+        )
+        identity = build_dpr_cache_identity(
+            corpus_manifest=corpus_manifest,
+            dpr_config=self.config,
+        )
         os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
         os.makedirs(INDEX_DIR, exist_ok=True)
 
-        embeddings = None
+        fingerprint = identity.fingerprint_sha256
+        embedding_path = os.path.join(
+            EMBEDDINGS_DIR, identity.embedding_cache_filename
+        )
+        faiss_path = os.path.join(INDEX_DIR, identity.faiss_cache_filename)
+        metadata_path = os.path.join(INDEX_DIR, f"dpr_cache_{fingerprint}.json")
 
-        # Load cached embeddings only if shape matches (guards against stale MiniLM cache)
-        if os.path.exists(emb_path):
-            loaded = np.load(emb_path)
-            if loaded.shape == (len(corpus), self.embedding_dim):
-                print(f"Loading cached DPR embeddings: {loaded.shape}")
-                embeddings = loaded
-            else:
-                print(f"Stale cache found (shape {loaded.shape}). Recomputing...")
+        self.corpus = runtime_documents
+        self.cache_identity = identity
+        self.embedding_cache_path = embedding_path
+        self.faiss_cache_path = faiss_path
+        self.cache_metadata_path = metadata_path
 
-        if embeddings is None:
-            embeddings = self._encode_contexts(corpus)
-            np.save(emb_path, embeddings)
-            print(f"Saved DPR embeddings: {emb_path}  shape={embeddings.shape}")
-
-        # Build or load FAISS index
-        rebuild = True
-        if os.path.exists(idx_path):
-            idx = faiss.read_index(idx_path)
-            if idx.d == embeddings.shape[1] and idx.ntotal == len(corpus):
-                print("Loading cached DPR FAISS index.")
-                self.faiss_index = idx
-                rebuild = False
-            else:
-                print(f"Stale FAISS index (d={idx.d}, n={idx.ntotal}). Rebuilding...")
-
-        if rebuild:
-            self.faiss_index = faiss.IndexFlatIP(self.config.embedding_dimension)
-            self.faiss_index.add(embeddings)
-            faiss.write_index(self.faiss_index, idx_path)
-            print(f"Saved DPR FAISS index: {idx_path}")
+        cached = self._load_validated_cache(
+            corpus_manifest=corpus_manifest,
+            embedding_path=embedding_path,
+            faiss_path=faiss_path,
+            metadata_path=metadata_path,
+        )
+        if cached is None:
+            embeddings = self._encode_contexts(runtime_documents)
+            self._validate_embeddings(
+                embeddings, document_count=corpus_manifest.document_count
+            )
+            index = faiss.IndexFlatIP(self.config.embedding_dimension)
+            index.add(embeddings)
+            self._validate_faiss_index(
+                index, document_count=corpus_manifest.document_count
+            )
+            self._write_cache_pair(
+                corpus_manifest=corpus_manifest,
+                embeddings=embeddings,
+                index=index,
+                embedding_path=embedding_path,
+                faiss_path=faiss_path,
+                metadata_path=metadata_path,
+            )
+            self.faiss_index = index
+        else:
+            _, self.faiss_index, metadata = cached
+            self.embedding_artifact_sha256 = metadata["embedding"]["sha256"]
+            self.index_artifact_sha256 = metadata["faiss"]["sha256"]
 
         self.is_indexed = True
+
+    def _validate_embeddings(self, embeddings, *, document_count: int) -> None:
+        if not isinstance(embeddings, np.ndarray):
+            raise TypeError("DPR embeddings must be a numpy.ndarray")
+        expected_shape = (document_count, self.config.embedding_dimension)
+        if embeddings.ndim != 2 or embeddings.shape != expected_shape:
+            raise ValueError(f"DPR embedding shape must be {expected_shape}")
+        if embeddings.dtype != np.dtype(self.config.embedding_dtype):
+            raise ValueError(
+                f"DPR embedding dtype must be {self.config.embedding_dtype}"
+            )
+        if not np.isfinite(embeddings).all():
+            raise ValueError("DPR embeddings must contain only finite values")
+
+    def _validate_faiss_index(self, index, *, document_count: int) -> None:
+        if not isinstance(index, faiss.IndexFlatIP):
+            raise ValueError("DPR FAISS index must be faiss.IndexFlatIP")
+        if index.d != self.config.embedding_dimension:
+            raise ValueError("DPR FAISS dimension does not match config")
+        if index.ntotal != document_count:
+            raise ValueError("DPR FAISS ntotal does not match corpus")
+
+    def _environment_metadata(self) -> dict:
+        return {
+            "device": self.device,
+            "faiss_version": getattr(faiss, "__version__", None)
+            or _package_version("faiss-cpu"),
+            "numpy_version": np.__version__,
+            "python_version": platform.python_version(),
+            "torch_version": torch.__version__,
+            "transformers_version": _package_version("transformers"),
+        }
+
+    def _expected_metadata_binding(self, corpus_manifest) -> dict:
+        return {
+            "cache_fingerprint_sha256": self.cache_identity.fingerprint_sha256,
+            "cache_identity_schema_version": self.cache_identity.schema_version,
+            "cache_schema_version": DPR_CACHE_METADATA_SCHEMA_VERSION,
+            "corpus_manifest_id": corpus_manifest.corpus_manifest_id,
+            "corpus_manifest_sha256": corpus_manifest.sha256,
+            "dpr_scientific_json": self.config.scientific_json(),
+            "scientific_payload": self.cache_identity.scientific_payload(),
+        }
+
+    def _load_validated_cache(
+        self, *, corpus_manifest, embedding_path, faiss_path, metadata_path
+    ):
+        if not all(os.path.isfile(path) for path in (metadata_path, embedding_path, faiss_path)):
+            return None
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as file:
+                metadata = json.load(file)
+            if not isinstance(metadata, dict):
+                return None
+            for key, value in self._expected_metadata_binding(
+                corpus_manifest
+            ).items():
+                if metadata.get(key) != value:
+                    return None
+
+            embedding_metadata = metadata.get("embedding")
+            faiss_metadata = metadata.get("faiss")
+            if not isinstance(embedding_metadata, dict) or not isinstance(
+                faiss_metadata, dict
+            ):
+                return None
+            expected_count = corpus_manifest.document_count
+            expected_shape = [expected_count, self.config.embedding_dimension]
+            if embedding_metadata != {
+                "document_count": expected_count,
+                "dtype": self.config.embedding_dtype,
+                "embedding_dimension": self.config.embedding_dimension,
+                "filename": os.path.basename(embedding_path),
+                "sha256": embedding_metadata.get("sha256"),
+                "shape": expected_shape,
+            }:
+                return None
+            if faiss_metadata != {
+                "dimension": self.config.embedding_dimension,
+                "filename": os.path.basename(faiss_path),
+                "index_type": self.config.index_type,
+                "ntotal": expected_count,
+                "sha256": faiss_metadata.get("sha256"),
+            }:
+                return None
+            if _physical_sha256(embedding_path) != embedding_metadata["sha256"]:
+                return None
+            if _physical_sha256(faiss_path) != faiss_metadata["sha256"]:
+                return None
+
+            embeddings = np.load(embedding_path, allow_pickle=False)
+            self._validate_embeddings(embeddings, document_count=expected_count)
+            index = faiss.read_index(faiss_path)
+            self._validate_faiss_index(index, document_count=expected_count)
+            if not isinstance(metadata.get("environment"), dict):
+                return None
+            return embeddings, index, metadata
+        except Exception:
+            return None
+
+    def _write_cache_pair(
+        self,
+        *,
+        corpus_manifest,
+        embeddings,
+        index,
+        embedding_path,
+        faiss_path,
+        metadata_path,
+    ) -> None:
+        self._write_numpy_atomically(embedding_path, embeddings)
+        self._write_faiss_atomically(faiss_path, index)
+        embedding_sha256 = _physical_sha256(embedding_path)
+        index_sha256 = _physical_sha256(faiss_path)
+        metadata = {
+            **self._expected_metadata_binding(corpus_manifest),
+            "embedding": {
+                "document_count": corpus_manifest.document_count,
+                "dtype": self.config.embedding_dtype,
+                "embedding_dimension": self.config.embedding_dimension,
+                "filename": os.path.basename(embedding_path),
+                "sha256": embedding_sha256,
+                "shape": list(embeddings.shape),
+            },
+            "environment": self._environment_metadata(),
+            "faiss": {
+                "dimension": index.d,
+                "filename": os.path.basename(faiss_path),
+                "index_type": self.config.index_type,
+                "ntotal": index.ntotal,
+                "sha256": index_sha256,
+            },
+        }
+        self._write_json_atomically(metadata_path, metadata)
+        self.embedding_artifact_sha256 = embedding_sha256
+        self.index_artifact_sha256 = index_sha256
+
+    @staticmethod
+    def _write_numpy_atomically(path: str, embeddings: np.ndarray) -> None:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=".dpr_embeddings_",
+                suffix=".npy.tmp",
+                dir=os.path.dirname(path),
+                delete=False,
+            ) as file:
+                temporary_path = file.name
+                np.save(file, embeddings, allow_pickle=False)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    @staticmethod
+    def _write_faiss_atomically(path: str, index) -> None:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix=".dpr_index_",
+                suffix=".faiss.tmp",
+                dir=os.path.dirname(path),
+                delete=False,
+            ) as file:
+                temporary_path = file.name
+            faiss.write_index(index, temporary_path)
+            with open(temporary_path, "rb") as file:
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    @staticmethod
+    def _write_json_atomically(path: str, metadata: dict) -> None:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=".dpr_cache_",
+                suffix=".json.tmp",
+                dir=os.path.dirname(path),
+                delete=False,
+            ) as file:
+                temporary_path = file.name
+                json.dump(
+                    metadata,
+                    file,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                file.write("\n")
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     # ------------------------------------------------------------------
     # Retrieval

@@ -208,36 +208,10 @@ def test_unsupported_scoring_or_index_mode_fails_loudly(field, value):
         OriginalDPRRetriever(replace(DPR_CONFIG, **{field: value}))
 
 
-def test_index_build_uses_configured_dimension_and_indexflatip(
-    tmp_path, monkeypatch
-):
-    config = replace(DPR_CONFIG, embedding_dimension=7)
-    retriever = OriginalDPRRetriever(config)
-    dimensions = []
-
-    class FakeIndex:
-        def __init__(self, dimension):
-            dimensions.append(dimension)
-            self.d = dimension
-            self.ntotal = 0
-
-        def add(self, embeddings):
-            self.ntotal = len(embeddings)
-
-    monkeypatch.setattr(dpr_module, "EMBEDDINGS_DIR", str(tmp_path / "embeddings"))
-    monkeypatch.setattr(dpr_module, "INDEX_DIR", str(tmp_path / "indices"))
-    monkeypatch.setattr(dpr_module.os.path, "exists", lambda _: False)
-    monkeypatch.setattr(
-        retriever,
-        "_encode_contexts",
-        lambda corpus: np.zeros((len(corpus), 7), dtype=np.float32),
-    )
-    monkeypatch.setattr(dpr_module.np, "save", lambda *args: None)
-    monkeypatch.setattr(dpr_module.faiss, "IndexFlatIP", FakeIndex)
-    monkeypatch.setattr(dpr_module.faiss, "write_index", lambda *args: None)
-
-    retriever.index([{"retrieval_content": "one"}])
-    assert dimensions == [config.embedding_dimension]
+def test_generic_index_rejects_corpus_without_scientific_provenance():
+    retriever = OriginalDPRRetriever()
+    with pytest.raises(ValueError, match="index_from_corpus_records"):
+        retriever.index([{"retrieval_content": "one"}])
 
 
 def test_retrieve_preserves_faiss_order_and_nonpositive_scores(monkeypatch):
