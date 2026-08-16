@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import gc
+import hashlib
+from importlib import metadata as importlib_metadata
+import json
+import os
+import platform
+import tempfile
 from typing import Dict, List, Tuple
 
 import faiss
@@ -11,6 +17,7 @@ import numpy as np
 import torch
 from transformers import AutoModel, AutoTokenizer
 
+from config import EMBEDDINGS_DIR, INDEX_DIR
 from retrievers import BaseRetriever
 from retrievers.contriever_config import CONTRIEVER_CONFIG, ContrieverConfig
 from retrieval_artifacts.contriever_cache_identity import (
@@ -19,6 +26,26 @@ from retrieval_artifacts.contriever_cache_identity import (
 from retrieval_artifacts.runtime_corpus import (
     contriever_runtime_documents_from_corpus_records,
 )
+
+
+CONTRIEVER_CACHE_METADATA_SCHEMA_VERSION = (
+    "sprint3.contriever-cache-metadata.v1"
+)
+
+
+def _package_version(distribution: str) -> str | None:
+    try:
+        return importlib_metadata.version(distribution)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
+def _physical_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class ContrieverRetriever(BaseRetriever):
@@ -37,6 +64,11 @@ class ContrieverRetriever(BaseRetriever):
         self.faiss_index = None
         self.embedding_dim = config.embedding_dimension
         self.cache_identity = None
+        self.embedding_cache_path = None
+        self.faiss_cache_path = None
+        self.cache_metadata_path = None
+        self.embedding_artifact_sha256 = None
+        self.index_artifact_sha256 = None
 
     def _validate_runtime_config(self) -> None:
         supported = {
@@ -214,26 +246,273 @@ class ContrieverRetriever(BaseRetriever):
             corpus_manifest=corpus_manifest,
             corpus_records=corpus_records,
         )
-        cache_identity = build_contriever_cache_identity(
+        identity = build_contriever_cache_identity(
             corpus_manifest=corpus_manifest,
             contriever_config=self.config,
         )
-        embeddings = self._encode_documents(runtime_documents)
-        self._validate_embeddings(
-            embeddings,
-            document_count=corpus_manifest.document_count,
+        os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
+        os.makedirs(INDEX_DIR, exist_ok=True)
+
+        fingerprint = identity.fingerprint_sha256
+        embedding_path = os.path.join(
+            EMBEDDINGS_DIR, identity.embedding_cache_filename
         )
-        index = faiss.IndexFlatIP(self.config.embedding_dimension)
-        index.add(embeddings)
-        self._validate_faiss_index(
-            index,
-            document_count=corpus_manifest.document_count,
+        faiss_path = os.path.join(INDEX_DIR, identity.faiss_cache_filename)
+        metadata_path = os.path.join(
+            INDEX_DIR, f"contriever_cache_{fingerprint}.json"
         )
 
-        self.corpus = runtime_documents
-        self.cache_identity = cache_identity
-        self.faiss_index = index
-        self.is_indexed = True
+        cached = self._load_validated_cache(
+            corpus_manifest=corpus_manifest,
+            cache_identity=identity,
+            embedding_path=embedding_path,
+            faiss_path=faiss_path,
+            metadata_path=metadata_path,
+        )
+        if cached is None:
+            embeddings = self._encode_documents(runtime_documents)
+            self._validate_embeddings(
+                embeddings,
+                document_count=corpus_manifest.document_count,
+            )
+            index = faiss.IndexFlatIP(self.config.embedding_dimension)
+            index.add(embeddings)
+            self._validate_faiss_index(
+                index,
+                document_count=corpus_manifest.document_count,
+            )
+            embedding_artifact_sha256, index_artifact_sha256 = (
+                self._write_cache_pair(
+                    corpus_manifest=corpus_manifest,
+                    cache_identity=identity,
+                    embeddings=embeddings,
+                    index=index,
+                    embedding_path=embedding_path,
+                    faiss_path=faiss_path,
+                    metadata_path=metadata_path,
+                )
+            )
+            new_index = index
+        else:
+            _, new_index, metadata = cached
+            embedding_artifact_sha256 = metadata["embedding"]["sha256"]
+            index_artifact_sha256 = metadata["faiss"]["sha256"]
+
+        (
+            self.corpus,
+            self.cache_identity,
+            self.embedding_cache_path,
+            self.faiss_cache_path,
+            self.cache_metadata_path,
+            self.faiss_index,
+            self.embedding_artifact_sha256,
+            self.index_artifact_sha256,
+            self.is_indexed,
+        ) = (
+            runtime_documents,
+            identity,
+            embedding_path,
+            faiss_path,
+            metadata_path,
+            new_index,
+            embedding_artifact_sha256,
+            index_artifact_sha256,
+            True,
+        )
+
+    def _environment_metadata(self) -> dict:
+        return {
+            "device": self.device,
+            "faiss_version": getattr(faiss, "__version__", None)
+            or _package_version("faiss-cpu"),
+            "numpy_version": np.__version__,
+            "python_version": platform.python_version(),
+            "torch_version": torch.__version__,
+            "transformers_version": _package_version("transformers"),
+        }
+
+    def _expected_metadata_binding(self, corpus_manifest, *, cache_identity) -> dict:
+        return {
+            "cache_fingerprint_sha256": cache_identity.fingerprint_sha256,
+            "cache_identity_schema_version": cache_identity.schema_version,
+            "cache_schema_version": CONTRIEVER_CACHE_METADATA_SCHEMA_VERSION,
+            "corpus_manifest_id": corpus_manifest.corpus_manifest_id,
+            "corpus_manifest_sha256": corpus_manifest.sha256,
+            "contriever_scientific_json": self.config.scientific_json(),
+            "scientific_payload": cache_identity.scientific_payload(),
+        }
+
+    def _load_validated_cache(
+        self,
+        *,
+        corpus_manifest,
+        cache_identity,
+        embedding_path,
+        faiss_path,
+        metadata_path,
+    ):
+        if not all(
+            os.path.isfile(path)
+            for path in (metadata_path, embedding_path, faiss_path)
+        ):
+            return None
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as file:
+                metadata = json.load(file)
+            if not isinstance(metadata, dict):
+                return None
+            for key, value in self._expected_metadata_binding(
+                corpus_manifest, cache_identity=cache_identity
+            ).items():
+                if metadata.get(key) != value:
+                    return None
+
+            embedding_metadata = metadata.get("embedding")
+            faiss_metadata = metadata.get("faiss")
+            if not isinstance(embedding_metadata, dict) or not isinstance(
+                faiss_metadata, dict
+            ):
+                return None
+            expected_count = corpus_manifest.document_count
+            expected_shape = [expected_count, self.config.embedding_dimension]
+            if embedding_metadata != {
+                "document_count": expected_count,
+                "dtype": self.config.embedding_dtype,
+                "embedding_dimension": self.config.embedding_dimension,
+                "filename": os.path.basename(embedding_path),
+                "sha256": embedding_metadata.get("sha256"),
+                "shape": expected_shape,
+            }:
+                return None
+            if faiss_metadata != {
+                "dimension": self.config.embedding_dimension,
+                "filename": os.path.basename(faiss_path),
+                "index_type": self.config.index_type,
+                "ntotal": expected_count,
+                "sha256": faiss_metadata.get("sha256"),
+            }:
+                return None
+            if not isinstance(metadata.get("environment"), dict):
+                return None
+            if _physical_sha256(embedding_path) != embedding_metadata["sha256"]:
+                return None
+            if _physical_sha256(faiss_path) != faiss_metadata["sha256"]:
+                return None
+
+            embeddings = np.load(embedding_path, allow_pickle=False)
+            self._validate_embeddings(embeddings, document_count=expected_count)
+            index = faiss.read_index(faiss_path)
+            self._validate_faiss_index(index, document_count=expected_count)
+            return embeddings, index, metadata
+        except Exception:
+            return None
+
+    def _write_cache_pair(
+        self,
+        *,
+        corpus_manifest,
+        cache_identity,
+        embeddings,
+        index,
+        embedding_path,
+        faiss_path,
+        metadata_path,
+    ) -> tuple[str, str]:
+        self._write_numpy_atomically(embedding_path, embeddings)
+        self._write_faiss_atomically(faiss_path, index)
+        embedding_sha256 = _physical_sha256(embedding_path)
+        index_sha256 = _physical_sha256(faiss_path)
+        metadata = {
+            **self._expected_metadata_binding(
+                corpus_manifest, cache_identity=cache_identity
+            ),
+            "embedding": {
+                "document_count": corpus_manifest.document_count,
+                "dtype": self.config.embedding_dtype,
+                "embedding_dimension": self.config.embedding_dimension,
+                "filename": os.path.basename(embedding_path),
+                "sha256": embedding_sha256,
+                "shape": list(embeddings.shape),
+            },
+            "environment": self._environment_metadata(),
+            "faiss": {
+                "dimension": index.d,
+                "filename": os.path.basename(faiss_path),
+                "index_type": self.config.index_type,
+                "ntotal": index.ntotal,
+                "sha256": index_sha256,
+            },
+        }
+        self._write_json_atomically(metadata_path, metadata)
+        return embedding_sha256, index_sha256
+
+    @staticmethod
+    def _write_numpy_atomically(path: str, embeddings: np.ndarray) -> None:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=".contriever_embeddings_",
+                suffix=".npy.tmp",
+                dir=os.path.dirname(path),
+                delete=False,
+            ) as file:
+                temporary_path = file.name
+                np.save(file, embeddings, allow_pickle=False)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    @staticmethod
+    def _write_faiss_atomically(path: str, index) -> None:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix=".contriever_index_",
+                suffix=".faiss.tmp",
+                dir=os.path.dirname(path),
+                delete=False,
+            ) as file:
+                temporary_path = file.name
+            faiss.write_index(index, temporary_path)
+            with open(temporary_path, "rb") as file:
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    @staticmethod
+    def _write_json_atomically(path: str, metadata: dict) -> None:
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix=".contriever_cache_",
+                suffix=".json.tmp",
+                dir=os.path.dirname(path),
+                delete=False,
+            ) as file:
+                temporary_path = file.name
+                json.dump(
+                    metadata,
+                    file,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                file.write("\n")
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
 
     def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[Dict, float]]:
         if not self.is_indexed:
