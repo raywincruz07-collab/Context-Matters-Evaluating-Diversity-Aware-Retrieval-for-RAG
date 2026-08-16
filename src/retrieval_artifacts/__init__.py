@@ -40,6 +40,7 @@ from retrieval_artifacts.sample_manifest import (
 )
 from retrieval_artifacts.runtime_corpus import (
     bm25_runtime_documents_from_corpus_records,
+    dpr_runtime_documents_from_corpus_records,
 )
 from retrieval_artifacts.candidate_io import (
     CANDIDATE_ARTIFACT_FORMAT,
@@ -81,6 +82,7 @@ __all__ = [
     "query_text_sha256",
     "verify_manifest_sample",
     "bm25_runtime_documents_from_corpus_records",
+    "dpr_runtime_documents_from_corpus_records",
     "CANDIDATE_ARTIFACT_FORMAT",
     "CandidateArtifactConflictError",
     "candidate_artifact_payload",

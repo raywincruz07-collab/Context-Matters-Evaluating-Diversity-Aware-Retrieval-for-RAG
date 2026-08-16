@@ -1,16 +1,8 @@
-"""
-Original DPR retriever using Facebook's dual-encoder architecture.
-
-Uses two separate encoders as in Karpukhin et al. (2020):
-  - facebook/dpr-question_encoder-single-nq-base  (query side)
-  - facebook/dpr-ctx_encoder-single-nq-base       (context side)
-
-Similarity: dot product (NOT cosine). Do NOT normalize embeddings.
-FAISS: IndexFlatIP (inner product = dot product on raw vectors).
-"""
+"""Original DPR dual-encoder runtime backed by authoritative DPRConfig."""
 
 import gc
 import os
+from collections.abc import Mapping
 from typing import Dict, List, Tuple
 
 import faiss
@@ -19,17 +11,18 @@ import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer, DPRContextEncoder, DPRQuestionEncoder
 
-from config import DPR_CTX_MODEL, DPR_QUERY_MODEL, EMBEDDINGS_DIR, INDEX_DIR
+from config import EMBEDDINGS_DIR, INDEX_DIR
 from retrievers import BaseRetriever
+from retrievers.dpr_config import DPR_CONFIG, DPRConfig
 
 
 class OriginalDPRRetriever(BaseRetriever):
-    def __init__(self):
+    def __init__(self, config: DPRConfig = DPR_CONFIG):
         super().__init__("dpr")
-        self.query_model_name = (
-            DPR_QUERY_MODEL  # facebook/dpr-question_encoder-single-nq-base
-        )
-        self.ctx_model_name = DPR_CTX_MODEL  # facebook/dpr-ctx_encoder-single-nq-base
+        if not isinstance(config, DPRConfig):
+            raise TypeError("config must be a DPRConfig")
+        self.config = config
+        self._validate_runtime_config()
 
         self.q_tokenizer = None
         self.ctx_tokenizer = None
@@ -37,8 +30,38 @@ class OriginalDPRRetriever(BaseRetriever):
         self.ctx_encoder = None
 
         self.faiss_index = None
-        self.embedding_dim = 768  # BERT-base hidden size
+        self.embedding_dim = config.embedding_dimension
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _validate_runtime_config(self) -> None:
+        """Reject scientific modes this frozen DPR runtime does not implement."""
+        supported = {
+            "query_preprocessing": "exact query string passed to tokenizer",
+            "document_preprocessing": (
+                "exact passage text passed to tokenizer paired with empty title"
+            ),
+            "paired_truncation_strategy": (
+                "delegated to tokenizer/Transformers default"
+            ),
+            "padding_semantics": (
+                "dynamic padding to longest encoded input in each batch"
+            ),
+            "context_title_policy": "empty title paired with passage text",
+            "representation": "pooler_output",
+            "embedding_dtype": "float32",
+            "normalization": "none",
+            "score_semantics": (
+                "raw dot product / inner product of unnormalized embeddings"
+            ),
+            "ranking_direction": "higher score is better",
+            "index_type": "faiss.IndexFlatIP",
+            "score_sign_filtering": "none",
+        }
+        for field, expected in supported.items():
+            if getattr(self.config, field) != expected:
+                raise ValueError(
+                    f"unsupported DPR {field}: {getattr(self.config, field)!r}"
+                )
 
     # ------------------------------------------------------------------
     # Model loading
@@ -50,20 +73,28 @@ class OriginalDPRRetriever(BaseRetriever):
 
         print("=" * 70)
         print("Loading ORIGINAL DPR models (facebook dual-encoder)")
-        print(f"  Question encoder : {self.query_model_name}")
-        print(f"  Context encoder  : {self.ctx_model_name}")
+        print(f"  Question encoder : {self.config.question_model_id}")
+        print(f"  Context encoder  : {self.config.context_model_id}")
         print(f"  Device           : {self.device}")
         print("=" * 70)
 
-        self.q_tokenizer = AutoTokenizer.from_pretrained(self.query_model_name)
-        self.ctx_tokenizer = AutoTokenizer.from_pretrained(self.ctx_model_name)
+        self.q_tokenizer = AutoTokenizer.from_pretrained(
+            self.config.question_tokenizer_id,
+            revision=self.config.question_tokenizer_revision,
+        )
+        self.ctx_tokenizer = AutoTokenizer.from_pretrained(
+            self.config.context_tokenizer_id,
+            revision=self.config.context_tokenizer_revision,
+        )
 
-        self.q_encoder = DPRQuestionEncoder.from_pretrained(self.query_model_name).to(
-            self.device
-        )
-        self.ctx_encoder = DPRContextEncoder.from_pretrained(self.ctx_model_name).to(
-            self.device
-        )
+        self.q_encoder = DPRQuestionEncoder.from_pretrained(
+            self.config.question_model_id,
+            revision=self.config.question_model_revision,
+        ).to(self.device)
+        self.ctx_encoder = DPRContextEncoder.from_pretrained(
+            self.config.context_model_id,
+            revision=self.config.context_model_revision,
+        ).to(self.device)
 
         self.q_encoder.eval()
         self.ctx_encoder.eval()
@@ -73,59 +104,88 @@ class OriginalDPRRetriever(BaseRetriever):
     # ------------------------------------------------------------------
 
     def _encode_questions(
-        self, questions: List[str], batch_size: int = 16
+        self, questions: List[str], batch_size: int | None = None
     ) -> np.ndarray:
         self._load_models()
         all_emb = []
+        effective_batch_size = batch_size or self.config.query_batch_size
 
-        for start in range(0, len(questions), batch_size):
-            batch = questions[start : start + batch_size]
+        for start in range(0, len(questions), effective_batch_size):
+            batch = questions[start : start + effective_batch_size]
             inputs = self.q_tokenizer(
                 batch,
                 padding=True,
-                truncation=True,
-                max_length=256,
+                truncation=self.config.truncation_enabled,
+                max_length=self.config.query_max_length,
                 return_tensors="pt",
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             with torch.no_grad():
-                emb = self.q_encoder(**inputs).pooler_output  # (B, 768)
+                emb = self._extract_representation(self.q_encoder(**inputs))
 
-            all_emb.append(emb.cpu().numpy().astype("float32"))
+            all_emb.append(
+                emb.cpu().numpy().astype(self.config.embedding_dtype, copy=False)
+            )
 
         return np.vstack(all_emb)
 
-    def _encode_contexts(self, corpus: List[Dict], batch_size: int = 16) -> np.ndarray:
+    def _encode_contexts(
+        self, corpus: List[Dict], batch_size: int | None = None
+    ) -> np.ndarray:
+        texts = []
+        for position, document in enumerate(corpus):
+            if not isinstance(document, Mapping):
+                raise TypeError(f"corpus document {position} must be a mapping")
+            if "retrieval_content" not in document:
+                raise ValueError(
+                    f"corpus document {position} is missing retrieval_content"
+                )
+            retrieval_content = document["retrieval_content"]
+            if not isinstance(retrieval_content, str):
+                raise TypeError(
+                    f"corpus document {position} retrieval_content must be a string"
+                )
+            texts.append(retrieval_content)
+
         self._load_models()
         all_emb = []
-
-        texts = [str(doc.get("text", "")) for doc in corpus]
-        titles = [""] * len(texts)  # PubMedQA has no separate titles
+        effective_batch_size = batch_size or self.config.context_batch_size
+        titles = [""] * len(texts)
 
         for start in tqdm(
-            range(0, len(texts), batch_size), desc="Encoding DPR contexts"
+            range(0, len(texts), effective_batch_size),
+            desc="Encoding DPR contexts",
         ):
-            batch_titles = titles[start : start + batch_size]
-            batch_texts = texts[start : start + batch_size]
+            batch_titles = titles[start : start + effective_batch_size]
+            batch_texts = texts[start : start + effective_batch_size]
 
             # DPR context encoder takes (title, text) as a token-type-separated pair
             inputs = self.ctx_tokenizer(
                 batch_titles,
                 batch_texts,
                 padding=True,
-                truncation=True,
-                max_length=256,
+                truncation=self.config.truncation_enabled,
+                max_length=self.config.context_max_length,
                 return_tensors="pt",
             )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             with torch.no_grad():
-                emb = self.ctx_encoder(**inputs).pooler_output  # (B, 768)
+                emb = self._extract_representation(self.ctx_encoder(**inputs))
 
-            all_emb.append(emb.cpu().numpy().astype("float32"))
+            all_emb.append(
+                emb.cpu().numpy().astype(self.config.embedding_dtype, copy=False)
+            )
 
         return np.vstack(all_emb)
+
+    def _extract_representation(self, encoder_output):
+        if self.config.representation != "pooler_output":
+            raise ValueError(
+                f"unsupported DPR representation: {self.config.representation!r}"
+            )
+        return encoder_output.pooler_output
 
     # ------------------------------------------------------------------
     # Indexing
@@ -152,7 +212,7 @@ class OriginalDPRRetriever(BaseRetriever):
                 print(f"Stale cache found (shape {loaded.shape}). Recomputing...")
 
         if embeddings is None:
-            embeddings = self._encode_contexts(corpus, batch_size=16)
+            embeddings = self._encode_contexts(corpus)
             np.save(emb_path, embeddings)
             print(f"Saved DPR embeddings: {emb_path}  shape={embeddings.shape}")
 
@@ -168,8 +228,7 @@ class OriginalDPRRetriever(BaseRetriever):
                 print(f"Stale FAISS index (d={idx.d}, n={idx.ntotal}). Rebuilding...")
 
         if rebuild:
-            # Inner product = dot product (DPR is NOT cosine; do NOT normalize)
-            self.faiss_index = faiss.IndexFlatIP(embeddings.shape[1])
+            self.faiss_index = faiss.IndexFlatIP(self.config.embedding_dimension)
             self.faiss_index.add(embeddings)
             faiss.write_index(self.faiss_index, idx_path)
             print(f"Saved DPR FAISS index: {idx_path}")
@@ -184,7 +243,7 @@ class OriginalDPRRetriever(BaseRetriever):
         if not self.is_indexed:
             raise RuntimeError("Index not built. Call index(corpus) first.")
 
-        query_emb = self._encode_questions([query], batch_size=1)
+        query_emb = self._encode_questions([query])
         scores, indices = self.faiss_index.search(query_emb, top_k)
 
         results = []

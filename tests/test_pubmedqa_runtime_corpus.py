@@ -1,14 +1,18 @@
 from dataclasses import replace
 import os
 import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
+import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from evaluation.metric_registry import DatasetId
 from retrievers.bm25_retriever import BM25Retriever
 import retrievers.bm25_retriever as bm25_module
+from retrievers.dpr_original_retriever import OriginalDPRRetriever
 from retrieval_artifacts import (
     CORPUS_MANIFEST_SCHEMA_VERSION,
     SAMPLE_MANIFEST_SCHEMA_VERSION,
@@ -18,6 +22,7 @@ from retrieval_artifacts import (
     SampleManifest,
     SampleManifestEntry,
     bm25_runtime_documents_from_corpus_records,
+    dpr_runtime_documents_from_corpus_records,
     document_content_sha256,
     query_text_sha256,
 )
@@ -218,3 +223,68 @@ def test_bm25_adapter_rejects_record_manifest_drift(changed_records, message):
             corpus_manifest=manifest,
             corpus_records=changed_records(records),
         )
+
+
+def test_dpr_adapter_preserves_order_id_types_and_exact_retrieval_content():
+    records = (
+        CorpusRecord(7, "source-7", None, "stored text", " exact content ", 0),
+        CorpusRecord("b", "source-b", None, "other stored", "second", 1),
+    )
+    documents = dpr_runtime_documents_from_corpus_records(
+        corpus_manifest=generic_manifest(records), corpus_records=records
+    )
+    assert documents == [
+        {"doc_id": 7, "retrieval_content": " exact content "},
+        {"doc_id": "b", "retrieval_content": "second"},
+    ]
+    assert type(documents[0]["doc_id"]) is int
+    assert type(documents[1]["doc_id"]) is str
+    assert documents[0]["retrieval_content"] != records[0].text
+
+
+def test_dpr_adapter_rejects_malformed_or_manifest_drift():
+    records = divergent_records()
+    manifest = generic_manifest(records)
+    with pytest.raises(TypeError, match="immutable tuple"):
+        dpr_runtime_documents_from_corpus_records(
+            corpus_manifest=manifest,
+            corpus_records=list(records),
+        )
+    with pytest.raises(ValueError, match="retrieval_content"):
+        dpr_runtime_documents_from_corpus_records(
+            corpus_manifest=manifest,
+            corpus_records=(
+                replace(records[0], retrieval_content="changed"),
+                *records[1:],
+            ),
+        )
+
+
+def test_dpr_adapter_output_passes_strict_context_input_without_models(monkeypatch):
+    records = divergent_records()
+    documents = dpr_runtime_documents_from_corpus_records(
+        corpus_manifest=generic_manifest(records), corpus_records=records
+    )
+    retriever = OriginalDPRRetriever()
+
+    class FakeTokenizer:
+        def __call__(self, titles, texts, **kwargs):
+            assert titles == ["", "", ""]
+            assert texts == [record.retrieval_content for record in records]
+            return {"input_ids": torch.ones((len(texts), 2), dtype=torch.long)}
+
+    class FakeEncoder:
+        def __call__(self, **inputs):
+            return SimpleNamespace(
+                pooler_output=torch.zeros(
+                    (len(records), retriever.config.embedding_dimension),
+                    dtype=torch.float32,
+                )
+            )
+
+    retriever.ctx_tokenizer = FakeTokenizer()
+    retriever.ctx_encoder = FakeEncoder()
+    monkeypatch.setattr(retriever, "_load_models", lambda: None)
+    embeddings = retriever._encode_contexts(documents)
+    assert embeddings.shape == (len(records), retriever.config.embedding_dimension)
+    assert embeddings.dtype == np.float32

@@ -23,10 +23,6 @@ CHUNK_SIZE = 256  # tokens per chunk (for longer abstracts)
 RETRIEVER_CHOICES = ["bm25", "dpr", "contriever", "colbertv2"]
 TOP_K = 5  # number of documents to retrieve
 
-# DPR-specific
-DPR_QUERY_MODEL = "facebook/dpr-question_encoder-single-nq-base"
-DPR_CTX_MODEL = "facebook/dpr-ctx_encoder-single-nq-base"
-
 # Contriever-specific
 CONTRIEVER_MODEL = "facebook/contriever"
 
