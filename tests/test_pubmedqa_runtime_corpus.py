@@ -22,6 +22,7 @@ from retrieval_artifacts import (
     SampleManifest,
     SampleManifestEntry,
     bm25_runtime_documents_from_corpus_records,
+    contriever_runtime_documents_from_corpus_records,
     dpr_runtime_documents_from_corpus_records,
     document_content_sha256,
     query_text_sha256,
@@ -288,3 +289,54 @@ def test_dpr_adapter_output_passes_strict_context_input_without_models(monkeypat
     embeddings = retriever._encode_contexts(documents)
     assert embeddings.shape == (len(records), retriever.config.embedding_dimension)
     assert embeddings.dtype == np.float32
+
+
+def test_contriever_adapter_maps_exact_order_ids_content_and_no_extra_fields():
+    records = (
+        CorpusRecord(7, "source-7", "ignored title", "wrong text", " Exact! ", 0),
+        CorpusRecord("b", "source-b", None, "also wrong", "Second", 1),
+    )
+    documents = contriever_runtime_documents_from_corpus_records(
+        corpus_manifest=generic_manifest(records),
+        corpus_records=records,
+    )
+    assert documents == [
+        {"doc_id": 7, "retrieval_content": " Exact! "},
+        {"doc_id": "b", "retrieval_content": "Second"},
+    ]
+    assert [set(document) for document in documents] == [
+        {"doc_id", "retrieval_content"},
+        {"doc_id", "retrieval_content"},
+    ]
+    assert type(documents[0]["doc_id"]) is int
+    assert type(documents[1]["doc_id"]) is str
+    assert documents[0]["retrieval_content"] != records[0].text
+
+
+def test_contriever_adapter_preserves_validator_accepted_empty_and_whitespace_content():
+    records = (
+        CorpusRecord(0, "source-0", None, "stored zero", "", 0),
+        CorpusRecord(1, "source-1", None, "stored one", "  ", 1),
+    )
+    documents = contriever_runtime_documents_from_corpus_records(
+        corpus_manifest=generic_manifest(records),
+        corpus_records=records,
+    )
+    assert documents == [
+        {"doc_id": 0, "retrieval_content": ""},
+        {"doc_id": 1, "retrieval_content": "  "},
+    ]
+
+
+def test_contriever_adapter_rejects_manifest_mismatch_without_repair():
+    records = divergent_records()
+    manifest = generic_manifest(records)
+    changed_records = (
+        replace(records[0], retrieval_content="changed"),
+        *records[1:],
+    )
+    with pytest.raises(ValueError, match="retrieval_content"):
+        contriever_runtime_documents_from_corpus_records(
+            corpus_manifest=manifest,
+            corpus_records=changed_records,
+        )

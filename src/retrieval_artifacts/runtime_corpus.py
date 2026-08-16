@@ -46,3 +46,19 @@ def dpr_runtime_documents_from_corpus_records(
         }
         for record in corpus_records
     ]
+
+
+def contriever_runtime_documents_from_corpus_records(
+    *,
+    corpus_manifest: CorpusManifest,
+    corpus_records: tuple[CorpusRecord, ...],
+) -> list[dict[str, Any]]:
+    """Map validated records to strict Contriever input without changing content."""
+    validate_corpus_records_against_manifest(corpus_manifest, corpus_records)
+    return [
+        {
+            "doc_id": record.document_id,
+            "retrieval_content": record.retrieval_content,
+        }
+        for record in corpus_records
+    ]
