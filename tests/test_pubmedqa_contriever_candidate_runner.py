@@ -1,0 +1,570 @@
+from dataclasses import replace
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from evaluation.metric_registry import DatasetId
+from retrieval_artifacts import (
+    CORPUS_MANIFEST_SCHEMA_VERSION,
+    SAMPLE_MANIFEST_SCHEMA_VERSION,
+    CandidateArtifactConflictError,
+    CorpusManifest,
+    CorpusManifestEntry,
+    CorpusRecord,
+    SampleManifest,
+    SampleManifestEntry,
+    build_contriever_cache_identity,
+    candidate_artifact_payload,
+    corpus_provenance_from_corpus_manifest,
+    dataset_provenance_from_sample_manifest,
+    document_content_sha256,
+    produce_contriever_candidate_artifact,
+    query_text_sha256,
+    read_candidate_artifact,
+)
+from retrievers.contriever_config import CONTRIEVER_CONFIG
+from scripts.build_corpus_manifests import (
+    ValidatedPubMedQAQuery,
+    ValidatedPubMedQARuntimeCorpus,
+)
+import scripts.run_pubmedqa_contriever_candidates as runner_module
+from scripts.run_pubmedqa_contriever_candidates import (
+    CANDIDATE_POOL_SIZE,
+    DEFAULT_OUTPUT_DIR,
+    ContrieverCandidatePoolSizeError,
+    _environment_fingerprint,
+    build_runtime_contriever_provenance,
+    run_pubmedqa_contriever_candidates,
+)
+
+
+GIT_SHA = "1" * 40
+ENV_SHA = "2" * 64
+INDEX_SHA = "3" * 64
+EMBEDDING_SHA = "4" * 64
+TRANSFORMERS_VERSION = "fixture-transformers-version"
+
+
+def sample_manifest():
+    queries = ((5, "Exact Query A?"), (2, " Exact Query B? "))
+    return SampleManifest(
+        schema_version=SAMPLE_MANIFEST_SCHEMA_VERSION,
+        dataset_id=DatasetId.PUBMEDQA,
+        source="synthetic-query-source",
+        config="fixture-config",
+        revision="fixture-query-revision",
+        split="fixture-split",
+        sampling_algorithm="fixture-order.v1",
+        sampling_seed=None,
+        requested_sample_size=None,
+        selection_dependencies=(),
+        entries=tuple(
+            SampleManifestEntry(
+                position=position,
+                sample_id=sample_id,
+                source_sample_id=100 + position,
+                query_text_sha256=query_text_sha256(text),
+            )
+            for position, (sample_id, text) in enumerate(queries)
+        ),
+    )
+
+
+def records():
+    return tuple(
+        CorpusRecord(
+            document_id=position if position % 2 == 0 else f"doc-{position}",
+            source_document_id=f"source-{position}",
+            title=None,
+            text=f"stored text {position}",
+            retrieval_content=f" retrieval content {position} ",
+            corpus_position=position,
+        )
+        for position in range(CANDIDATE_POOL_SIZE)
+    )
+
+
+def manifest(samples, corpus_records):
+    return CorpusManifest(
+        schema_version=CORPUS_MANIFEST_SCHEMA_VERSION,
+        dataset_id=DatasetId.PUBMEDQA,
+        source="synthetic-corpus-source",
+        config="fixture-corpus",
+        revision="fixture-corpus-revision",
+        split="fixture-corpus-split",
+        construction_algorithm="fixture-corpus.v1",
+        input_sample_manifest_id=samples.manifest_id,
+        input_sample_manifest_sha256=samples.sha256,
+        dependencies=(),
+        rng_family=None,
+        sampling_seed=None,
+        rng_state_semantics=None,
+        requested_negatives_per_query=None,
+        negative_sampling_scope=None,
+        negative_exclusion_scope=None,
+        negative_sampling_without_replacement=None,
+        final_source_id_ordering=None,
+        entries=tuple(
+            CorpusManifestEntry(
+                position=record.corpus_position,
+                doc_id=record.document_id,
+                source_document_id=record.source_document_id,
+                title_sha256=None,
+                text_sha256=document_content_sha256(record.text),
+                retrieval_content_sha256=document_content_sha256(
+                    record.retrieval_content
+                ),
+            )
+            for record in corpus_records
+        ),
+    )
+
+
+def runtime():
+    samples = sample_manifest()
+    corpus_records = records()
+    corpus_manifest = manifest(samples, corpus_records)
+    dataset = dataset_provenance_from_sample_manifest(samples)
+    corpus = corpus_provenance_from_corpus_manifest(
+        corpus_manifest=corpus_manifest,
+        corpus_records=corpus_records,
+        dataset_provenance=dataset,
+    )
+    texts = ("Exact Query A?", " Exact Query B? ")
+    return ValidatedPubMedQARuntimeCorpus(
+        sample_manifest=samples,
+        corpus_manifest=corpus_manifest,
+        corpus_records=corpus_records,
+        dataset_provenance=dataset,
+        corpus_provenance=corpus,
+        ordered_queries=tuple(
+            ValidatedPubMedQAQuery(entry.position, entry.sample_id, text)
+            for entry, text in zip(samples.entries, texts, strict=True)
+        ),
+    )
+
+
+class FakeContriever:
+    def __init__(
+        self,
+        *,
+        config=CONTRIEVER_CONFIG,
+        result_count=CANDIDATE_POOL_SIZE,
+        fail_query=None,
+        fail_index=False,
+    ):
+        self.config = config
+        self.result_count = result_count
+        self.fail_query = fail_query
+        self.fail_index = fail_index
+        self.index_calls = []
+        self.retrieve_calls = []
+        self.is_indexed = False
+        self.cache_identity = None
+        self.index_artifact_sha256 = None
+        self.embedding_artifact_sha256 = None
+        self.indexed_records = None
+
+    def index_from_corpus_records(self, *, corpus_manifest, corpus_records):
+        self.index_calls.append((corpus_manifest, corpus_records))
+        if self.fail_index:
+            raise RuntimeError("synthetic index failure")
+        self.indexed_records = corpus_records
+        self.cache_identity = build_contriever_cache_identity(
+            corpus_manifest=corpus_manifest,
+            contriever_config=self.config,
+        )
+        self.index_artifact_sha256 = INDEX_SHA
+        self.embedding_artifact_sha256 = EMBEDDING_SHA
+        self.is_indexed = True
+
+    def retrieve(self, query, top_k):
+        self.retrieve_calls.append((query, top_k))
+        if query == self.fail_query:
+            raise RuntimeError("synthetic retrieval failure")
+        ordered = list(reversed(self.indexed_records))
+        results = []
+        for position in range(self.result_count):
+            record = ordered[position % len(ordered)]
+            score = -2.5 if position == 0 else (0.0 if position == 1 else 30.0 - position)
+            results.append(({"doc_id": record.document_id}, score))
+        return results
+
+
+def run(output_dir, retriever=None, **changes):
+    values = dict(
+        runtime=runtime(),
+        retriever=FakeContriever() if retriever is None else retriever,
+        output_dir=output_dir,
+        producing_git_commit=GIT_SHA,
+        worktree_clean=True,
+        environment_fingerprint_sha256=ENV_SHA,
+        transformers_version=TRANSFORMERS_VERSION,
+    )
+    values.update(changes)
+    return run_pubmedqa_contriever_candidates(**values)
+
+
+def test_constants_paths_index_once_and_exact_producer_inputs(tmp_path):
+    assert CANDIDATE_POOL_SIZE == 20
+    assert DEFAULT_OUTPUT_DIR == (
+        Path(__file__).resolve().parents[1]
+        / "artifacts/candidates/pubmedqa/contriever"
+    )
+    retriever = FakeContriever()
+    calls = []
+
+    def producer_spy(**kwargs):
+        calls.append(kwargs)
+        return produce_contriever_candidate_artifact(**kwargs)
+
+    summary = run(tmp_path, retriever, max_samples=1, producer=producer_spy)
+    expected = runtime()
+    assert len(retriever.index_calls) == 1
+    assert retriever.index_calls[0] == (
+        expected.corpus_manifest,
+        expected.corpus_records,
+    )
+    assert retriever.retrieve_calls == [("Exact Query A?", 20)]
+    assert calls[0]["sample_manifest"] == expected.sample_manifest
+    assert calls[0]["dataset_provenance"] == expected.dataset_provenance
+    assert calls[0]["corpus_manifest"] == expected.corpus_manifest
+    assert calls[0]["corpus_provenance"] == expected.corpus_provenance
+    assert calls[0]["corpus_records"] == expected.corpus_records
+    assert calls[0]["cache_identity"] == retriever.cache_identity
+    assert calls[0]["requested_top_n"] == 20
+    assert [result.document_id for result in calls[0]["raw_results"]] == [
+        record.document_id for record in reversed(expected.corpus_records)
+    ]
+    assert [result.native_score for result in calls[0]["raw_results"]][:2] == [
+        -2.5,
+        0.0,
+    ]
+    artifact = read_candidate_artifact(tmp_path / "sample_0000.json")
+    assert len(artifact.candidates) == 20
+    assert [candidate.native_score for candidate in artifact.candidates][:2] == [
+        -2.5,
+        0.0,
+    ]
+    assert summary.completed_sample_ids == (5,)
+    assert summary.index_artifact_sha256 == INDEX_SHA
+    assert summary.embedding_artifact_sha256 == EMBEDDING_SHA
+
+
+def test_all_queries_frozen_order_and_max_samples_validation(tmp_path):
+    retriever = FakeContriever()
+    summary = run(tmp_path, retriever)
+    assert summary.completed_sample_ids == (5, 2)
+    assert retriever.retrieve_calls == [
+        ("Exact Query A?", 20),
+        (" Exact Query B? ", 20),
+    ]
+    assert len(retriever.index_calls) == 1
+    for invalid in (0, -1):
+        with pytest.raises(ValueError, match="positive"):
+            run(tmp_path / str(invalid), max_samples=invalid)
+    for invalid in (True, False, 1.5, "1"):
+        with pytest.raises(TypeError, match="non-boolean integer"):
+            run(tmp_path / str(invalid), max_samples=invalid)
+
+
+def test_config_mismatch_rejected_before_indexing(tmp_path):
+    changed = FakeContriever(
+        config=replace(CONTRIEVER_CONFIG, document_max_length=256)
+    )
+    with pytest.raises(ValueError, match="frozen CONTRIEVER_CONFIG"):
+        run(tmp_path, changed)
+    assert changed.index_calls == []
+
+
+@pytest.mark.parametrize(
+    "field,value,error,message",
+    [
+        ("is_indexed", False, RuntimeError, "must be indexed"),
+        ("cache_identity", None, RuntimeError, "missing cache_identity"),
+        ("embedding_artifact_sha256", None, ValueError, "embedding_artifact_sha256"),
+        ("embedding_artifact_sha256", "bad", ValueError, "embedding_artifact_sha256"),
+        ("index_artifact_sha256", None, ValueError, "index_artifact_sha256"),
+        ("index_artifact_sha256", "bad", ValueError, "index_artifact_sha256"),
+    ],
+)
+def test_runtime_provenance_requires_complete_index_state(field, value, error, message):
+    active_runtime = runtime()
+    retriever = FakeContriever()
+    retriever.index_from_corpus_records(
+        corpus_manifest=active_runtime.corpus_manifest,
+        corpus_records=active_runtime.corpus_records,
+    )
+    setattr(retriever, field, value)
+    with pytest.raises(error, match=message):
+        build_runtime_contriever_provenance(
+            active_runtime,
+            retriever,
+            transformers_version=TRANSFORMERS_VERSION,
+        )
+
+
+def test_runtime_provenance_is_canonical_and_binding_validator_runs(monkeypatch):
+    active_runtime = runtime()
+    retriever = FakeContriever()
+    retriever.index_from_corpus_records(
+        corpus_manifest=active_runtime.corpus_manifest,
+        corpus_records=active_runtime.corpus_records,
+    )
+    provenance = build_runtime_contriever_provenance(
+        active_runtime,
+        retriever,
+        transformers_version=TRANSFORMERS_VERSION,
+    )
+    assert provenance.retriever_name == "contriever"
+    assert provenance.index_fingerprint_sha256 == (
+        retriever.cache_identity.fingerprint_sha256
+    )
+    assert provenance.index_artifact_sha256 == INDEX_SHA
+
+    monkeypatch.setattr(
+        runner_module,
+        "validate_contriever_index_binding",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("binding invoked")),
+    )
+    with pytest.raises(ValueError, match="binding invoked"):
+        build_runtime_contriever_provenance(
+            active_runtime,
+            retriever,
+            transformers_version=TRANSFORMERS_VERSION,
+        )
+
+
+@pytest.mark.parametrize("count", [19, 21])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_noncanonical_retrieved_pool_fails_without_write(tmp_path, count, dry_run):
+    summary = run(
+        tmp_path,
+        FakeContriever(result_count=count),
+        max_samples=1,
+        dry_run=dry_run,
+    )
+    assert summary.completed_sample_ids == ()
+    assert summary.failed_samples == 1
+    assert summary.failures[0].error_type == ContrieverCandidatePoolSizeError.__name__
+    assert summary.failures[0].message == (
+        f"expected candidate count = 20; actual candidate count = {count}"
+    )
+    assert not (tmp_path / "sample_0000.json").exists()
+
+
+def test_noncanonical_producer_output_fails_second_boundary(tmp_path):
+    def short_producer(**kwargs):
+        artifact = produce_contriever_candidate_artifact(**kwargs)
+        return replace(artifact, candidates=artifact.candidates[:-1])
+
+    summary = run(tmp_path, max_samples=1, producer=short_producer)
+    assert summary.failed_samples == 1
+    assert summary.failures[0].error_type == ContrieverCandidatePoolSizeError.__name__
+    assert "producer returned" in summary.failures[0].message
+    assert not (tmp_path / "sample_0000.json").exists()
+
+
+def test_dry_run_indexes_retrieves_validates_but_writes_no_candidate(tmp_path):
+    retriever = FakeContriever()
+    calls = []
+
+    def producer_spy(**kwargs):
+        calls.append(kwargs)
+        return produce_contriever_candidate_artifact(**kwargs)
+
+    summary = run(
+        tmp_path,
+        retriever,
+        max_samples=1,
+        dry_run=True,
+        producer=producer_spy,
+    )
+    assert summary.completed_samples == 1
+    assert len(retriever.index_calls) == len(retriever.retrieve_calls) == len(calls) == 1
+    assert not (tmp_path / "sample_0000.json").exists()
+
+
+def test_normal_failure_records_and_continues_but_conflict_propagates(tmp_path):
+    summary = run(tmp_path, FakeContriever(fail_query="Exact Query A?"))
+    assert summary.failed_samples == 1
+    assert summary.failures[0].sample_id == 5
+    assert summary.failures[0].error_type == "RuntimeError"
+    assert summary.completed_sample_ids == (2,)
+    assert not (tmp_path / "sample_0000.json").exists()
+
+    def conflicting_producer(**kwargs):
+        raise CandidateArtifactConflictError("synthetic conflict")
+
+    with pytest.raises(CandidateArtifactConflictError, match="synthetic conflict"):
+        run(tmp_path / "conflict", max_samples=1, producer=conflicting_producer)
+
+
+def test_index_failure_aborts_run_before_retrieval_or_artifact_write(tmp_path):
+    retriever = FakeContriever(fail_index=True)
+
+    with pytest.raises(RuntimeError, match="synthetic index failure"):
+        run(tmp_path, retriever)
+
+    assert len(retriever.index_calls) == 1
+    assert retriever.retrieve_calls == []
+    assert list(tmp_path.glob("sample_*.json")) == []
+
+
+def _write_payload(path, artifact):
+    path.write_text(json.dumps(candidate_artifact_payload(artifact)), encoding="utf-8")
+
+
+def test_matching_existing_artifact_skips_safely(tmp_path):
+    run(tmp_path, max_samples=1)
+    retriever = FakeContriever()
+    summary = run(tmp_path, retriever, max_samples=1)
+    assert summary.skipped_sample_ids == (5,)
+    assert summary.skipped_existing_samples == 1
+    assert retriever.retrieve_calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda artifact: replace(artifact, query_text="wrong query"),
+        lambda artifact: replace(
+            artifact,
+            dataset=replace(artifact.dataset, revision="wrong"),
+        ),
+        lambda artifact: replace(
+            artifact,
+            corpus=replace(artifact.corpus, revision="wrong"),
+        ),
+        lambda artifact: replace(
+            artifact,
+            retriever=replace(artifact.retriever, library_version="wrong"),
+        ),
+        lambda artifact: replace(artifact, requested_top_n=21),
+        lambda artifact: replace(artifact, candidates=artifact.candidates[:-1]),
+        lambda artifact: replace(artifact, producing_git_commit="9" * 40),
+        lambda artifact: replace(artifact, worktree_clean=False),
+        lambda artifact: replace(
+            artifact,
+            environment_fingerprint_sha256="9" * 64,
+        ),
+    ],
+)
+def test_conflicting_existing_artifact_is_never_overwritten(tmp_path, mutation):
+    run(tmp_path, max_samples=1)
+    path = tmp_path / "sample_0000.json"
+    _write_payload(path, mutation(read_candidate_artifact(path)))
+    before = path.read_bytes()
+    with pytest.raises(CandidateArtifactConflictError, match="conflicts with run"):
+        run(tmp_path, max_samples=1)
+    assert path.read_bytes() == before
+
+
+def test_summary_counts_ids_and_physical_hashes_are_exact(tmp_path):
+    summary = run(tmp_path, FakeContriever(fail_query=" Exact Query B? "))
+    assert summary.manifest_sample_count == 2
+    assert summary.selected_sample_count == 2
+    assert summary.completed_samples == 1
+    assert summary.skipped_existing_samples == 0
+    assert summary.failed_samples == 1
+    assert summary.candidate_pool_size == 20
+    assert summary.completed_sample_ids == (5,)
+    assert summary.skipped_sample_ids == ()
+    assert summary.failures[0].sample_id == 2
+    assert summary.embedding_artifact_sha256 == EMBEDDING_SHA
+    assert summary.index_artifact_sha256 == INDEX_SHA
+
+
+def test_environment_fingerprint_is_deterministic_and_version_sensitive():
+    values = dict(
+        transformers_version="transformers-a",
+        torch_version="torch-a",
+        numpy_version="numpy-a",
+        faiss_version=None,
+        device="cpu",
+    )
+    assert _environment_fingerprint(**values) == _environment_fingerprint(**values)
+    assert _environment_fingerprint(**values) != _environment_fingerprint(
+        **(values | {"transformers_version": "transformers-b"})
+    )
+
+
+def test_import_and_help_are_side_effect_free(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    watched = (
+        root / "data/embeddings",
+        root / "data/indices",
+        root / "artifacts/candidates/pubmedqa/contriever",
+    )
+    before = {path: tuple(path.glob("*")) if path.exists() else () for path in watched}
+    commands = (
+        (sys.executable, "-c", "import scripts.run_pubmedqa_contriever_candidates"),
+        (sys.executable, "-m", "scripts.run_pubmedqa_contriever_candidates", "--help"),
+    )
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "HF_HOME": str(tmp_path / "hf")},
+        )
+        assert result.returncode == 0, result.stderr
+    help_text = " ".join(result.stdout.split())
+    assert "Contriever cache/index setup" in help_text
+    assert "cache artifacts may still be created or updated" in help_text
+    after = {path: tuple(path.glob("*")) if path.exists() else () for path in watched}
+    assert after == before
+    assert not (tmp_path / "hf").exists()
+
+
+@pytest.mark.parametrize("failed_samples,expected", [(0, 0), (1, 1)])
+def test_main_exit_code_reflects_failures(monkeypatch, capsys, failed_samples, expected):
+    import retrievers.contriever_retriever as contriever_module
+
+    monkeypatch.setattr(
+        runner_module,
+        "parse_args",
+        lambda: SimpleNamespace(
+            cache_dir=None,
+            output_dir=Path("unused"),
+            max_samples=1,
+            dry_run=True,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "datasets",
+        SimpleNamespace(load_dataset=lambda *args, **kwargs: ()),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "load_validated_pubmedqa_runtime_corpus",
+        lambda rows: object(),
+    )
+    monkeypatch.setattr(
+        runner_module.importlib_metadata,
+        "version",
+        lambda distribution: "fixture-version",
+    )
+    monkeypatch.setattr(runner_module, "_git_provenance", lambda: (GIT_SHA, True))
+    monkeypatch.setattr(
+        contriever_module,
+        "ContrieverRetriever",
+        lambda config: SimpleNamespace(device="cpu"),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "run_pubmedqa_contriever_candidates",
+        lambda **kwargs: SimpleNamespace(failed_samples=failed_samples),
+    )
+    assert runner_module.main() == expected
+    capsys.readouterr()
