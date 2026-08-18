@@ -1,6 +1,7 @@
 from dataclasses import FrozenInstanceError, asdict, replace
 import inspect
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import os
 import sys
@@ -20,6 +21,11 @@ from retrievers.colbert_runtime import (
 
 
 REVISION = "0855eac81381e0323a846f1ed7d8452d4c648b50"
+RUNTIME_VERSIONS = {
+    "colbert-ai": "0.2.22",
+    "transformers": "4.57.6",
+    "huggingface-hub": "0.36.2",
+}
 
 
 class FakeStanfordConfig:
@@ -47,7 +53,7 @@ def fake_backend(monkeypatch):
     monkeypatch.setattr(
         runtime_module.importlib_metadata,
         "version",
-        lambda distribution: "0.2.22",
+        lambda distribution: RUNTIME_VERSIONS[distribution],
     )
     monkeypatch.setattr(
         runtime_module,
@@ -76,27 +82,53 @@ def expected_values(snapshot: Path):
     }
 
 
-def test_wrong_colbert_ai_version_is_rejected(tmp_path, monkeypatch):
+@pytest.mark.parametrize("distribution", RUNTIME_VERSIONS)
+def test_wrong_runtime_distribution_version_is_rejected(
+    tmp_path, monkeypatch, distribution
+):
+    versions = dict(RUNTIME_VERSIONS)
+    versions[distribution] = "wrong-version"
     monkeypatch.setattr(
         runtime_module.importlib_metadata,
         "version",
-        lambda distribution: "0.2.21",
+        lambda name: versions[name],
     )
 
-    with pytest.raises(RuntimeError, match="version mismatch"):
+    with pytest.raises(
+        RuntimeError,
+        match=rf"{distribution} version mismatch: expected .* got wrong-version",
+    ):
         build_stanford_colbert_config(resolved(tmp_path))
 
 
-def test_exact_colbert_ai_distribution_name_is_checked(tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing_distribution", RUNTIME_VERSIONS)
+def test_missing_runtime_distribution_is_rejected_clearly(
+    tmp_path, monkeypatch, missing_distribution
+):
+    def version(distribution):
+        if distribution == missing_distribution:
+            raise runtime_module.importlib_metadata.PackageNotFoundError(distribution)
+        return RUNTIME_VERSIONS[distribution]
+
+    monkeypatch.setattr(runtime_module.importlib_metadata, "version", version)
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"{missing_distribution}==.* is not installed",
+    ):
+        build_stanford_colbert_config(resolved(tmp_path))
+
+
+def test_exact_runtime_distribution_names_are_checked(tmp_path, monkeypatch):
     calls = []
 
     def version(distribution):
         calls.append(distribution)
-        return "0.2.22"
+        return RUNTIME_VERSIONS[distribution]
 
     monkeypatch.setattr(runtime_module.importlib_metadata, "version", version)
     build_stanford_colbert_config(resolved(tmp_path))
-    assert calls == ["colbert-ai"]
+    assert calls == ["colbert-ai", "transformers", "huggingface-hub"]
 
 
 @pytest.mark.parametrize(
@@ -196,10 +228,36 @@ def test_initializer_uses_exact_path_explicit_config_and_validates_post_init(
         checkpoint_resolution.snapshot_path
     )
     assert result.colbert_ai_version == "0.2.22"
+    assert result.transformers_version == "4.57.6"
+    assert result.huggingface_hub_version == "0.36.2"
     with pytest.raises(FrozenInstanceError):
         result.colbert_ai_version = "different"
     with pytest.raises(FrozenInstanceError):
         result.effective_config.dim = 64
+
+
+def test_version_validation_precedes_checkpoint_initialization(tmp_path, monkeypatch):
+    calls = []
+
+    def version(distribution):
+        if distribution == "transformers":
+            return "5.14.1"
+        return RUNTIME_VERSIONS[distribution]
+
+    def forbidden_checkpoint_class():
+        calls.append("checkpoint")
+        raise AssertionError("Checkpoint initialization must not be reached")
+
+    monkeypatch.setattr(runtime_module.importlib_metadata, "version", version)
+    monkeypatch.setattr(
+        runtime_module,
+        "_stanford_checkpoint_class",
+        forbidden_checkpoint_class,
+    )
+
+    with pytest.raises(RuntimeError, match="transformers version mismatch"):
+        initialize_colbert_checkpoint(resolved(tmp_path))
+    assert calls == []
 
 
 @pytest.mark.parametrize("field", ["doc_maxlen", "nbits", "ncells"])
@@ -226,3 +284,32 @@ def test_runtime_source_has_no_ragatouille_or_hugging_face_download_dependency()
     assert "ragatouille" not in source
     assert "snapshot_download" not in source
     assert "hf_hub_download" not in source
+
+
+def test_runtime_import_is_lazy_for_stanford_colbert_and_torch():
+    repository_root = Path(__file__).resolve().parents[1]
+    environment = dict(os.environ)
+    existing_pythonpath = environment.get("PYTHONPATH")
+    source_path = str(repository_root / "src")
+    environment["PYTHONPATH"] = (
+        source_path
+        if not existing_pythonpath
+        else os.pathsep.join((source_path, existing_pythonpath))
+    )
+    script = (
+        "import sys; "
+        "assert 'colbert' not in sys.modules; "
+        "assert 'torch' not in sys.modules; "
+        "import retrievers.colbert_runtime; "
+        "assert 'colbert' not in sys.modules; "
+        "assert 'torch' not in sys.modules"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repository_root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr

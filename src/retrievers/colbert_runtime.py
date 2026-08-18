@@ -13,6 +13,8 @@ from retrievers.colbert_config import COLBERT_CONFIG, ColBERTConfig
 
 _SCIENTIFIC_INTERACTION = "ColBERT late interaction / MaxSim"
 _STANFORD_INTERACTION = "colbert"
+_TRANSFORMERS_VERSION = "4.57.6"
+_HUGGINGFACE_HUB_VERSION = "0.36.2"
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,8 @@ class InitializedColBERTCheckpoint:
     resolved_checkpoint: ResolvedColBERTCheckpoint
     effective_config: StanfordColBERTEffectiveConfig
     colbert_ai_version: str
+    transformers_version: str
+    huggingface_hub_version: str
 
 
 def _stanford_config_class():
@@ -64,17 +68,32 @@ def _stanford_checkpoint_class():
     return Checkpoint
 
 
-def _require_colbert_ai_version(config: ColBERTConfig) -> str:
+def _require_distribution_version(distribution: str, expected: str) -> str:
     try:
-        installed = importlib_metadata.version("colbert-ai")
+        installed = importlib_metadata.version(distribution)
     except importlib_metadata.PackageNotFoundError as error:
-        raise RuntimeError("required distribution colbert-ai is not installed") from error
-    if installed != config.colbert_ai_version:
         raise RuntimeError(
-            "colbert-ai version mismatch: "
-            f"expected {config.colbert_ai_version}, got {installed}"
+            f"required distribution {distribution}=={expected} is not installed"
+        ) from error
+    if installed != expected:
+        raise RuntimeError(
+            f"{distribution} version mismatch: expected {expected}, got {installed}"
         )
     return installed
+
+
+def _require_runtime_versions(config: ColBERTConfig) -> dict[str, str]:
+    return {
+        "colbert_ai_version": _require_distribution_version(
+            "colbert-ai", config.colbert_ai_version
+        ),
+        "transformers_version": _require_distribution_version(
+            "transformers", _TRANSFORMERS_VERSION
+        ),
+        "huggingface_hub_version": _require_distribution_version(
+            "huggingface-hub", _HUGGINGFACE_HUB_VERSION
+        ),
+    }
 
 
 def _validated_snapshot_path(
@@ -165,7 +184,15 @@ def build_stanford_colbert_config(
     """
     if not isinstance(config, ColBERTConfig):
         raise TypeError("config must be a ColBERTConfig")
-    _require_colbert_ai_version(config)
+    _require_runtime_versions(config)
+    return _build_stanford_colbert_config(resolved_checkpoint, config=config)
+
+
+def _build_stanford_colbert_config(
+    resolved_checkpoint: ResolvedColBERTCheckpoint,
+    *,
+    config: ColBERTConfig,
+):
     snapshot_path = _validated_snapshot_path(resolved_checkpoint, config)
     values = _expected_stanford_values(snapshot_path, config)
     stanford_config = _stanford_config_class()(**values)
@@ -184,9 +211,11 @@ def initialize_colbert_checkpoint(
     verbose: int = 0,
 ) -> InitializedColBERTCheckpoint:
     """Initialize only from the validated local immutable snapshot path."""
-    installed_version = _require_colbert_ai_version(config)
+    if not isinstance(config, ColBERTConfig):
+        raise TypeError("config must be a ColBERTConfig")
+    runtime_versions = _require_runtime_versions(config)
     snapshot_path = _validated_snapshot_path(resolved_checkpoint, config)
-    stanford_config = build_stanford_colbert_config(
+    stanford_config = _build_stanford_colbert_config(
         resolved_checkpoint,
         config=config,
     )
@@ -206,5 +235,5 @@ def initialize_colbert_checkpoint(
         checkpoint=checkpoint,
         resolved_checkpoint=resolved_checkpoint,
         effective_config=effective_config,
-        colbert_ai_version=installed_version,
+        **runtime_versions,
     )

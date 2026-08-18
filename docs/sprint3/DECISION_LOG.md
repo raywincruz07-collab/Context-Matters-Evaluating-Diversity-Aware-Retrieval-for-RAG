@@ -61,3 +61,23 @@ prevent collection-size-dependent wrapper adaptation.
 Native ranking is Stanford ColBERT behavior. The pool size and PLAID search
 parameters, together with the explicit absence of downstream ranking changes,
 are deliberate study controls.
+
+## 2026-08-18 — Isolated canonical ColBERT runtime dependencies
+
+- **Decision:** Run canonical direct Stanford ColBERT in an isolated environment
+  with `colbert-ai==0.2.22`, `transformers==4.57.6`, and
+  `huggingface_hub==0.36.2`.
+- **Reason:** The general project environment's `transformers==5.14.1`
+  reproducibly failed during real Stanford ColBERT checkpoint initialization
+  because `HF_ColBERT` lacked `all_tied_weights_keys`.
+- **Evidence:** The same pinned checkpoint initialized under Transformers
+  4.40.2 and 4.57.6. Version 4.57.6 was selected because a fresh environment
+  mechanically derived from the project lock remained dependency-consistent
+  with `sentence-transformers==5.7.0`, passed `pip check`, initialized the real
+  checkpoint successfully, and retained physical checkpoint manifest
+  `0be9d161036288daa494d3627655691c07812a6bea0cb488e148845ffb4b0287`.
+- **Scope:** Runtime dependency compatibility and reproducibility only. No
+  scientific ColBERT retrieval parameter changed; no claim of scientific
+  superiority is made.
+- **Status:** Local CPU environment validated. RunPod CUDA 13.0 / RTX 5090
+  environment pending GPU validation.
