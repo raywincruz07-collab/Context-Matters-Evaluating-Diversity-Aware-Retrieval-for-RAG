@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError, asdict, replace
 import inspect
+import json
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -345,6 +346,8 @@ def test_direct_index_search_maps_pids_and_preserves_native_order(tmp_path, monk
         def index(self, *, name, collection, overwrite):
             calls.append(("index", name, tuple(collection), overwrite))
             directory = index_root / "sprint3_pubmedqa_colbertv2" / "indexes" / name
+            marker = directory.parent / f".{name}.sprint3-complete.json"
+            assert not marker.exists()
             directory.mkdir(parents=True)
             (directory / "metadata.json").write_text("{}", encoding="utf-8")
     class FakeSearcher:
@@ -355,6 +358,7 @@ def test_direct_index_search_maps_pids_and_preserves_native_order(tmp_path, monk
     monkeypatch.setattr(runtime_module, "_stanford_run_classes", lambda: (FakeRun, FakeRunConfig))
     monkeypatch.setattr(runtime_module, "_stanford_indexer_class", lambda: FakeIndexer)
     monkeypatch.setattr(runtime_module, "_stanford_searcher_class", lambda: FakeSearcher)
+    monkeypatch.setattr(runtime_module, "require_colbert_runtime_prerequisites", lambda: None)
     seeded = []
     monkeypatch.setattr(runtime_module, "apply_colbert_index_seed", seeded.append)
     retriever = CanonicalColBERTRetriever(
@@ -380,9 +384,13 @@ def test_direct_index_search_maps_pids_and_preserves_native_order(tmp_path, monk
         f"canonical-{pid}" for pid in reversed(range(20))
     ]
     assert retriever.index_artifact_sha256 is not None
+    assert retriever.completion_record_path.is_file()
+    assert json.loads(retriever.completion_record_path.read_text()) == (
+        retriever._completion_record_payload()
+    )
 
 
-def test_existing_index_is_loaded_without_reseeding_or_overwrite(tmp_path, monkeypatch):
+def test_preexisting_index_without_completion_record_is_rejected(tmp_path):
     checkpoint = resolved(tmp_path)
     retriever = CanonicalColBERTRetriever(
         resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
@@ -395,6 +403,11 @@ def test_existing_index_is_loaded_without_reseeding_or_overwrite(tmp_path, monke
     )
     retriever.index_directory.mkdir(parents=True)
     (retriever.index_directory / "file").write_bytes(b"index")
+    with pytest.raises(RuntimeError, match=r"incomplete ColBERT index: .*cleanup/rebuild"):
+        retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
+
+
+def _mock_existing_index_backend(monkeypatch):
     class Context:
         def __enter__(self): return self
         def __exit__(self, *args): return False
@@ -408,8 +421,136 @@ def test_existing_index_is_loaded_without_reseeding_or_overwrite(tmp_path, monke
     monkeypatch.setattr(runtime_module, "_stanford_searcher_class", lambda: Searcher)
     monkeypatch.setattr(runtime_module, "_stanford_indexer_class", lambda: pytest.fail("must not index"))
     monkeypatch.setattr(runtime_module, "apply_colbert_index_seed", lambda seed: pytest.fail("must not seed"))
+    monkeypatch.setattr(runtime_module, "require_colbert_runtime_prerequisites", lambda: None)
+
+
+def test_valid_existing_index_and_matching_completion_record_are_reused(tmp_path, monkeypatch):
+    checkpoint = resolved(tmp_path)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=tmp_path / "indexes",
+    )
+    manifest, records = _corpus()
+    from retrieval_artifacts import build_colbert_cache_identity
+    retriever.cache_identity = build_colbert_cache_identity(
+        corpus_manifest=manifest, checkpoint_snapshot_manifest_sha256="c" * 64
+    )
+    retriever.index_directory.mkdir(parents=True)
+    (retriever.index_directory / "file").write_bytes(b"index")
+    retriever._write_completion_record()
+    _mock_existing_index_backend(monkeypatch)
     retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
     assert retriever.is_indexed
+
+
+def test_missing_ninja_prevents_completed_index_searcher_initialization(
+    tmp_path, monkeypatch
+):
+    checkpoint = resolved(tmp_path)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=tmp_path / "indexes",
+    )
+    manifest, records = _corpus()
+    from retrieval_artifacts import build_colbert_cache_identity
+    retriever.cache_identity = build_colbert_cache_identity(
+        corpus_manifest=manifest, checkpoint_snapshot_manifest_sha256="c" * 64
+    )
+    retriever.index_directory.mkdir(parents=True)
+    (retriever.index_directory / "file").write_bytes(b"index")
+    retriever._write_completion_record()
+    monkeypatch.setattr(
+        runtime_module.subprocess, "check_output",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("ninja")),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_stanford_searcher_class",
+        lambda: pytest.fail("must not construct Searcher"),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_stanford_indexer_class",
+        lambda: pytest.fail("must not construct Indexer"),
+    )
+    with pytest.raises(
+        RuntimeError, match="ColBERT runtime prerequisite missing: ninja"
+    ):
+        retriever.index_from_corpus_records(
+            corpus_manifest=manifest, corpus_records=records
+        )
+    assert retriever.is_indexed is False
+
+
+def test_wrong_completion_record_identity_is_rejected(tmp_path):
+    checkpoint = resolved(tmp_path)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=tmp_path / "indexes",
+    )
+    manifest, records = _corpus()
+    from retrieval_artifacts import build_colbert_cache_identity
+    retriever.cache_identity = build_colbert_cache_identity(
+        corpus_manifest=manifest, checkpoint_snapshot_manifest_sha256="c" * 64
+    )
+    retriever.index_directory.mkdir(parents=True)
+    (retriever.index_directory / "file").write_bytes(b"index")
+    payload = retriever._completion_record_payload()
+    payload["index_fingerprint_sha256"] = "0" * 64
+    retriever.completion_record_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="completion record identity mismatch"):
+        retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
+
+
+def test_missing_ninja_fails_before_indexer_is_invoked(tmp_path, monkeypatch):
+    checkpoint = resolved(tmp_path)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=tmp_path / "indexes",
+    )
+    manifest, records = _corpus()
+    monkeypatch.setattr(
+        runtime_module.subprocess, "check_output",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("ninja")),
+    )
+    monkeypatch.setattr(runtime_module, "_stanford_indexer_class", lambda: pytest.fail("must not construct Indexer"))
+    with pytest.raises(RuntimeError, match="ColBERT runtime prerequisite missing: ninja"):
+        retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
+    assert not retriever.index_directory.exists()
+    assert not retriever.completion_record_path.exists()
+
+
+def test_failed_indexer_leaves_partial_files_without_completion_record(tmp_path, monkeypatch):
+    checkpoint = resolved(tmp_path)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=tmp_path / "indexes",
+    )
+    manifest, records = _corpus()
+    class Context:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+    class Run:
+        def context(self, config): return Context()
+    class RunConfig:
+        def __init__(self, **kwargs): pass
+    class FailingIndexer:
+        def __init__(self, **kwargs): pass
+        def index(self, *, name, collection, overwrite):
+            retriever.index_directory.mkdir(parents=True)
+            (retriever.index_directory / "partial").write_bytes(b"forensics")
+            assert not retriever.completion_record_path.exists()
+            raise RuntimeError("synthetic Stanford failure")
+    monkeypatch.setattr(runtime_module, "require_colbert_runtime_prerequisites", lambda: None)
+    monkeypatch.setattr(runtime_module, "apply_colbert_index_seed", lambda seed: None)
+    monkeypatch.setattr(runtime_module, "_stanford_run_classes", lambda: (Run, RunConfig))
+    monkeypatch.setattr(runtime_module, "_stanford_indexer_class", lambda: FailingIndexer)
+    with pytest.raises(RuntimeError, match="synthetic Stanford failure"):
+        retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
+    assert (retriever.index_directory / "partial").read_bytes() == b"forensics"
+    assert not retriever.completion_record_path.exists()
+    with pytest.raises(RuntimeError, match="incomplete ColBERT index"):
+        retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
 
 
 def test_retriever_rejects_undersized_native_result_pool():

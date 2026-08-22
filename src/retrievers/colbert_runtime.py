@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
+import json
 import math
+import os
 from pathlib import Path
 import random
+import subprocess
+import tempfile
 from typing import Any
 
 from retrievers.colbert_checkpoint import ResolvedColBERTCheckpoint
@@ -30,6 +34,7 @@ _SCIENTIFIC_INTERACTION = "ColBERT late interaction / MaxSim"
 _STANFORD_INTERACTION = "colbert"
 _TRANSFORMERS_VERSION = "4.57.6"
 _HUGGINGFACE_HUB_VERSION = "0.36.2"
+_INDEX_COMPLETION_SCHEMA_VERSION = "sprint3.colbert-index-completion.v1"
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,16 @@ def apply_colbert_index_seed(seed: int) -> None:
             torch.cuda.manual_seed_all(seed)
     except ImportError:
         pass
+
+
+def require_colbert_runtime_prerequisites() -> None:
+    """Match PyTorch's practical Ninja availability check without installing it."""
+    try:
+        subprocess.check_output(
+            ["ninja", "--version"], stderr=subprocess.STDOUT
+        )
+    except Exception as error:
+        raise RuntimeError("ColBERT runtime prerequisite missing: ninja") from error
 
 
 def _require_distribution_version(distribution: str, expected: str) -> str:
@@ -356,6 +371,76 @@ class CanonicalColBERTRetriever:
             self.cache_identity.index_name
         )
 
+    @property
+    def completion_record_path(self) -> Path:
+        """Project-owned sidecar kept outside Stanford's index directory."""
+        if self.cache_identity is None:
+            raise RuntimeError("ColBERT cache identity is not initialized")
+        return self.index_directory.parent / (
+            f".{self.cache_identity.index_name}.sprint3-complete.json"
+        )
+
+    def _completion_record_payload(self) -> dict[str, Any]:
+        if self.cache_identity is None:
+            raise RuntimeError("ColBERT cache identity is not initialized")
+        return {
+            "checkpoint_snapshot_manifest_sha256": (
+                self.cache_identity.checkpoint_snapshot_manifest_sha256
+            ),
+            "corpus_manifest_sha256": self.cache_identity.corpus_manifest.sha256,
+            "document_count": self.cache_identity.corpus_manifest.document_count,
+            "index_fingerprint_sha256": self.cache_identity.fingerprint_sha256,
+            "index_name": self.cache_identity.index_name,
+            "schema_version": _INDEX_COMPLETION_SCHEMA_VERSION,
+        }
+
+    def _require_valid_completion_record(self) -> None:
+        path = self.completion_record_path
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"invalid ColBERT completion record: {path}; explicit cleanup/"
+                "rebuild is required"
+            ) from error
+        if payload != self._completion_record_payload():
+            raise RuntimeError(
+                f"ColBERT completion record identity mismatch: {path}; explicit "
+                "cleanup/rebuild is required"
+            )
+
+    def _write_completion_record(self) -> None:
+        """Publish an atomic, non-overwriting sidecar after successful indexing."""
+        path = self.completion_record_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                json.dump(
+                    self._completion_record_payload(),
+                    handle,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.link(temporary_path, path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
     def index_from_corpus_records(
         self,
         *,
@@ -378,6 +463,24 @@ class CanonicalColBERTRetriever:
         self.cache_identity = identity
         self._collection = collection
         self.pid_to_document_id = pid_map
+
+        directory_exists = self.index_directory.exists()
+        completion_exists = self.completion_record_path.exists()
+        if directory_exists and not completion_exists:
+            raise RuntimeError(
+                f"incomplete ColBERT index: {self.index_directory}; explicit "
+                "cleanup/rebuild is required"
+            )
+        if completion_exists:
+            self._require_valid_completion_record()
+            if not self.index_directory.is_dir():
+                raise RuntimeError(
+                    f"ColBERT completion record has no index directory: "
+                    f"{self.index_directory}; explicit cleanup/rebuild is required"
+                )
+
+        # Required for both new indexing and completed-index Searcher reuse.
+        require_colbert_runtime_prerequisites()
 
         search_config = build_stanford_colbert_config(
             self.resolved_checkpoint, config=self.config
@@ -404,6 +507,11 @@ class CanonicalColBERTRetriever:
                     collection=list(collection),
                     overwrite=False,
                 )
+                if not self.index_directory.is_dir():
+                    raise RuntimeError(
+                        "Stanford ColBERT did not create the expected index"
+                    )
+                self._write_completion_record()
             if not self.index_directory.is_dir():
                 raise RuntimeError("Stanford ColBERT did not create the expected index")
             self.index_artifact_sha256 = fingerprint_colbert_index_directory(

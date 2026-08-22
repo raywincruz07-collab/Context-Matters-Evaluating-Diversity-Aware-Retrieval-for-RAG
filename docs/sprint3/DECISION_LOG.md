@@ -66,7 +66,8 @@ are deliberate study controls.
 
 - **Decision:** Run canonical direct Stanford ColBERT in an isolated environment
   with `colbert-ai==0.2.22`, `transformers==4.57.6`, and
-  `huggingface_hub==0.36.2`.
+  `huggingface_hub==0.36.2`. The ColBERT-only RunPod lock also pins
+  `ninja==1.13.0`, required by PyTorch's C++ extension loader.
 - **Reason:** The general project environment's `transformers==5.14.1`
   reproducibly failed during real Stanford ColBERT checkpoint initialization
   because `HF_ColBERT` lacked `all_tied_weights_keys`.
