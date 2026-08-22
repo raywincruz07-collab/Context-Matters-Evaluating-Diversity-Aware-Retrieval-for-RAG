@@ -28,3 +28,6 @@ data/hotpot_beir_qa_pairs.json
 
 # Generated per-query candidate outputs are resumable runtime artifacts.
 artifacts/candidates/
+
+# Generated retriever indexes are runtime artifacts and must not dirty provenance.
+artifacts/indexes/
