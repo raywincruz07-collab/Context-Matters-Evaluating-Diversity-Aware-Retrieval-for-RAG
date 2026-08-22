@@ -14,9 +14,22 @@ import retrievers.colbert_runtime as runtime_module
 from retrievers.colbert_checkpoint import ResolvedColBERTCheckpoint
 from retrievers.colbert_config import COLBERT_CONFIG
 from retrievers.colbert_runtime import (
+    CanonicalColBERTRetriever,
+    apply_colbert_index_seed,
     build_stanford_colbert_config,
     initialize_colbert_checkpoint,
     validate_effective_stanford_config,
+)
+from retrievers.colbert_checkpoint_provenance import (
+    ColBERTCheckpointPhysicalProvenance,
+)
+from evaluation.metric_registry import DatasetId
+from retrieval_artifacts import (
+    CORPUS_MANIFEST_SCHEMA_VERSION,
+    CorpusManifest,
+    CorpusManifestEntry,
+    CorpusRecord,
+    document_content_sha256,
 )
 
 
@@ -76,6 +89,7 @@ def expected_values(snapshot: Path):
         "nbits": 2,
         "kmeans_niters": 4,
         "nranks": 1,
+        "amp": True,
         "ncells": 2,
         "centroid_score_threshold": 0.45,
         "ndocs": 1024,
@@ -151,6 +165,7 @@ def test_every_frozen_runtime_field_is_explicitly_translated(tmp_path):
     assert stanford.constructor_kwargs == expected_values(checkpoint.snapshot_path)
     assert stanford.checkpoint == str(checkpoint.snapshot_path.resolve())
     assert stanford.interaction == "colbert"
+    assert stanford.amp is True
     assert COLBERT_CONFIG.interaction == "ColBERT late interaction / MaxSim"
     assert "candidate_pool_size" not in stanford.constructor_kwargs
     assert "seed" not in stanford.constructor_kwargs
@@ -277,6 +292,137 @@ def test_initializer_rejects_backend_overwriting_explicit_values(
 
     with pytest.raises(ValueError, match=field):
         initialize_colbert_checkpoint(resolved(tmp_path))
+
+
+def _physical(checkpoint):
+    return ColBERTCheckpointPhysicalProvenance(
+        checkpoint_id=COLBERT_CONFIG.checkpoint_id,
+        checkpoint_revision=REVISION,
+        snapshot_path=checkpoint.snapshot_path.resolve(), files=(), file_count=0,
+        total_bytes=0, snapshot_manifest_sha256="c" * 64, metadata=None,
+    )
+
+
+def _corpus():
+    records = tuple(CorpusRecord(
+        document_id=f"canonical-{position}", source_document_id=f"source-{position}",
+        title=None, text=f"text-{position}", retrieval_content=f"exact {position}",
+        corpus_position=position,
+    ) for position in range(20))
+    manifest = CorpusManifest(
+        schema_version=CORPUS_MANIFEST_SCHEMA_VERSION,
+        dataset_id=DatasetId.PUBMEDQA, source="fixture", config=None,
+        revision="revision", split="train", construction_algorithm="fixture.v1",
+        input_sample_manifest_id=None, input_sample_manifest_sha256=None,
+        dependencies=(), rng_family=None, sampling_seed=None,
+        rng_state_semantics=None, requested_negatives_per_query=None,
+        negative_sampling_scope=None, negative_exclusion_scope=None,
+        negative_sampling_without_replacement=None, final_source_id_ordering=None,
+        entries=tuple(CorpusManifestEntry(
+            record.corpus_position, record.document_id, record.source_document_id,
+            None, document_content_sha256(record.text),
+            document_content_sha256(record.retrieval_content),
+        ) for record in records),
+    )
+    return manifest, records
+
+
+def test_direct_index_search_maps_pids_and_preserves_native_order(tmp_path, monkeypatch):
+    checkpoint = resolved(tmp_path)
+    index_root = tmp_path / "indexes"
+    calls = []
+
+    class Context:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+    class FakeRun:
+        def context(self, config): calls.append(("run", config)); return Context()
+    class FakeRunConfig:
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items(): setattr(self, key, value)
+    class FakeIndexer:
+        def __init__(self, **kwargs): calls.append(("indexer", kwargs))
+        def index(self, *, name, collection, overwrite):
+            calls.append(("index", name, tuple(collection), overwrite))
+            directory = index_root / "sprint3_pubmedqa_colbertv2" / "indexes" / name
+            directory.mkdir(parents=True)
+            (directory / "metadata.json").write_text("{}", encoding="utf-8")
+    class FakeSearcher:
+        def __init__(self, **kwargs): calls.append(("searcher", kwargs))
+        def search(self, query, k):
+            return list(reversed(range(20))), list(range(1, 21)), [20.0-i for i in range(20)]
+
+    monkeypatch.setattr(runtime_module, "_stanford_run_classes", lambda: (FakeRun, FakeRunConfig))
+    monkeypatch.setattr(runtime_module, "_stanford_indexer_class", lambda: FakeIndexer)
+    monkeypatch.setattr(runtime_module, "_stanford_searcher_class", lambda: FakeSearcher)
+    seeded = []
+    monkeypatch.setattr(runtime_module, "apply_colbert_index_seed", seeded.append)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=index_root,
+    )
+    manifest, records = _corpus()
+    retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
+    results = retriever.retrieve("Exact query", top_k=20)
+    assert seeded == [12345]
+    assert calls[0][1].amp is True
+    assert calls[2][2] == tuple(record.retrieval_content for record in records)
+    assert calls[2][3] is False
+    index_config = calls[1][1]["config"]
+    assert not hasattr(index_config, "ncells")
+    assert not hasattr(index_config, "centroid_score_threshold")
+    assert not hasattr(index_config, "ndocs")
+    search_config = calls[3][1]["config"]
+    assert search_config.ncells == 2
+    assert search_config.centroid_score_threshold == 0.45
+    assert search_config.ndocs == 1024
+    assert [result.document_id for result in results] == [
+        f"canonical-{pid}" for pid in reversed(range(20))
+    ]
+    assert retriever.index_artifact_sha256 is not None
+
+
+def test_existing_index_is_loaded_without_reseeding_or_overwrite(tmp_path, monkeypatch):
+    checkpoint = resolved(tmp_path)
+    retriever = CanonicalColBERTRetriever(
+        resolved_checkpoint=checkpoint, checkpoint_provenance=_physical(checkpoint),
+        index_root=tmp_path / "indexes",
+    )
+    manifest, records = _corpus()
+    from retrieval_artifacts import build_colbert_cache_identity
+    retriever.cache_identity = build_colbert_cache_identity(
+        corpus_manifest=manifest, checkpoint_snapshot_manifest_sha256="c" * 64
+    )
+    retriever.index_directory.mkdir(parents=True)
+    (retriever.index_directory / "file").write_bytes(b"index")
+    class Context:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+    class Run:
+        def context(self, config): return Context()
+    class RunConfig:
+        def __init__(self, **kwargs): pass
+    class Searcher:
+        def __init__(self, **kwargs): pass
+    monkeypatch.setattr(runtime_module, "_stanford_run_classes", lambda: (Run, RunConfig))
+    monkeypatch.setattr(runtime_module, "_stanford_searcher_class", lambda: Searcher)
+    monkeypatch.setattr(runtime_module, "_stanford_indexer_class", lambda: pytest.fail("must not index"))
+    monkeypatch.setattr(runtime_module, "apply_colbert_index_seed", lambda seed: pytest.fail("must not seed"))
+    retriever.index_from_corpus_records(corpus_manifest=manifest, corpus_records=records)
+    assert retriever.is_indexed
+
+
+def test_retriever_rejects_undersized_native_result_pool():
+    retriever = object.__new__(CanonicalColBERTRetriever)
+    retriever.config = COLBERT_CONFIG
+    retriever.pid_to_document_id = tuple(f"doc-{i}" for i in range(20))
+    retriever._searcher = SimpleNamespace(
+        search=lambda query, k: (
+            list(range(19)), list(range(1, 20)), [19.0-i for i in range(19)]
+        )
+    )
+    with pytest.raises(ValueError, match="non-canonical candidate count"):
+        retriever.retrieve("query", top_k=20)
 
 
 def test_runtime_source_has_no_ragatouille_or_hugging_face_download_dependency():

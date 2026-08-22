@@ -4,11 +4,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
+import math
 from pathlib import Path
+import random
 from typing import Any
 
 from retrievers.colbert_checkpoint import ResolvedColBERTCheckpoint
+from retrievers.colbert_checkpoint_provenance import (
+    ColBERTCheckpointPhysicalProvenance,
+)
 from retrievers.colbert_config import COLBERT_CONFIG, ColBERTConfig
+from retrieval_artifacts.colbert_cache_identity import (
+    ColBERTCacheIdentity,
+    build_colbert_cache_identity,
+    fingerprint_colbert_index_directory,
+)
+from retrieval_artifacts.corpus_manifest import CorpusManifest
+from retrieval_artifacts.producer import CorpusRecord, RawCandidateResult
+from retrieval_artifacts.runtime_corpus import (
+    colbert_runtime_collection_from_corpus_records,
+)
 
 
 _SCIENTIFIC_INTERACTION = "ColBERT late interaction / MaxSim"
@@ -33,6 +48,7 @@ class StanfordColBERTEffectiveConfig:
     nbits: int
     kmeans_niters: int
     nranks: int
+    amp: bool
     ncells: int
     centroid_score_threshold: float
     ndocs: int
@@ -66,6 +82,45 @@ def _stanford_checkpoint_class():
     from colbert.modeling.checkpoint import Checkpoint
 
     return Checkpoint
+
+
+def _stanford_indexer_class():
+    from colbert import Indexer
+
+    return Indexer
+
+
+def _stanford_searcher_class():
+    from colbert import Searcher
+
+    return Searcher
+
+
+def _stanford_run_classes():
+    from colbert.infra import Run, RunConfig
+
+    return Run, RunConfig
+
+
+def apply_colbert_index_seed(seed: int) -> None:
+    """Initialize controlled RNGs; this does not promise bit-exact GPU output."""
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("seed must be a non-negative non-boolean integer")
+    random.seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed)
+    except ImportError:
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass
 
 
 def _require_distribution_version(distribution: str, expected: str) -> str:
@@ -137,6 +192,7 @@ def _expected_stanford_values(
         "nbits": config.nbits,
         "kmeans_niters": config.kmeans_niters,
         "nranks": config.nranks,
+        "amp": config.amp,
         "ncells": config.search_ncells,
         "centroid_score_threshold": float(
             config.search_centroid_score_threshold
@@ -204,6 +260,21 @@ def _build_stanford_colbert_config(
     return stanford_config
 
 
+def _build_stanford_colbert_index_config(
+    resolved_checkpoint: ResolvedColBERTCheckpoint,
+    *,
+    config: ColBERTConfig,
+):
+    """Build the physical-index config without project search-only overrides."""
+    snapshot_path = _validated_snapshot_path(resolved_checkpoint, config)
+    values = _expected_stanford_values(snapshot_path, config)
+    for field in (
+        "query_maxlen", "ncells", "centroid_score_threshold", "ndocs"
+    ):
+        values.pop(field)
+    return _stanford_config_class()(**values)
+
+
 def initialize_colbert_checkpoint(
     resolved_checkpoint: ResolvedColBERTCheckpoint,
     *,
@@ -237,3 +308,139 @@ def initialize_colbert_checkpoint(
         effective_config=effective_config,
         **runtime_versions,
     )
+
+
+class CanonicalColBERTRetriever:
+    """Manifest-bound direct Stanford PLAID index/search adapter."""
+
+    def __init__(
+        self,
+        *,
+        resolved_checkpoint: ResolvedColBERTCheckpoint,
+        checkpoint_provenance: ColBERTCheckpointPhysicalProvenance,
+        index_root: Path,
+        experiment: str = "sprint3_pubmedqa_colbertv2",
+        config: ColBERTConfig = COLBERT_CONFIG,
+    ) -> None:
+        if not isinstance(checkpoint_provenance, ColBERTCheckpointPhysicalProvenance):
+            raise TypeError("checkpoint_provenance must be physical provenance")
+        _validated_snapshot_path(resolved_checkpoint, config)
+        if (
+            checkpoint_provenance.checkpoint_id != config.checkpoint_id
+            or checkpoint_provenance.checkpoint_revision != config.checkpoint_revision
+            or checkpoint_provenance.snapshot_path.resolve()
+            != resolved_checkpoint.snapshot_path.resolve()
+        ):
+            raise ValueError("checkpoint physical provenance does not match resolution")
+        self.resolved_checkpoint = resolved_checkpoint
+        self.checkpoint_provenance = checkpoint_provenance
+        self.index_root = Path(index_root).resolve()
+        self.experiment = experiment
+        self.config = config
+        self.cache_identity: ColBERTCacheIdentity | None = None
+        self.index_artifact_sha256: str | None = None
+        self.pid_to_document_id: tuple[str | int, ...] = ()
+        self._collection: tuple[str, ...] = ()
+        self._searcher: Any = None
+
+    @property
+    def is_indexed(self) -> bool:
+        return self._searcher is not None
+
+    @property
+    def index_directory(self) -> Path:
+        if self.cache_identity is None:
+            raise RuntimeError("ColBERT cache identity is not initialized")
+        return (
+            self.index_root / self.experiment / "indexes" /
+            self.cache_identity.index_name
+        )
+
+    def index_from_corpus_records(
+        self,
+        *,
+        corpus_manifest: CorpusManifest,
+        corpus_records: tuple[CorpusRecord, ...],
+    ) -> None:
+        collection, pid_map = colbert_runtime_collection_from_corpus_records(
+            corpus_manifest=corpus_manifest,
+            corpus_records=corpus_records,
+        )
+        identity = build_colbert_cache_identity(
+            corpus_manifest=corpus_manifest,
+            checkpoint_snapshot_manifest_sha256=(
+                self.checkpoint_provenance.snapshot_manifest_sha256
+            ),
+            colbert_config=self.config,
+        )
+        if self.cache_identity is not None and self.cache_identity != identity:
+            raise RuntimeError("ColBERT retriever cannot be rebound to another index")
+        self.cache_identity = identity
+        self._collection = collection
+        self.pid_to_document_id = pid_map
+
+        search_config = build_stanford_colbert_config(
+            self.resolved_checkpoint, config=self.config
+        )
+        index_config = _build_stanford_colbert_index_config(
+            self.resolved_checkpoint, config=self.config
+        )
+        Run, RunConfig = _stanford_run_classes()
+        run_config = RunConfig(
+            nranks=self.config.nranks,
+            amp=self.config.amp,
+            experiment=self.experiment,
+            root=str(self.index_root),
+        )
+        with Run().context(run_config):
+            if not self.index_directory.exists():
+                apply_colbert_index_seed(self.config.seed)
+                indexer = _stanford_indexer_class()(
+                    checkpoint=str(self.resolved_checkpoint.snapshot_path.resolve()),
+                    config=index_config,
+                )
+                indexer.index(
+                    name=identity.index_name,
+                    collection=list(collection),
+                    overwrite=False,
+                )
+            if not self.index_directory.is_dir():
+                raise RuntimeError("Stanford ColBERT did not create the expected index")
+            self.index_artifact_sha256 = fingerprint_colbert_index_directory(
+                self.index_directory
+            )
+            self._searcher = _stanford_searcher_class()(
+                index=identity.index_name,
+                config=search_config,
+                collection=list(collection),
+            )
+
+    def retrieve(self, query: str, *, top_k: int) -> tuple[RawCandidateResult, ...]:
+        if not self.is_indexed:
+            raise RuntimeError("ColBERT index must be initialized before retrieval")
+        if not isinstance(query, str) or not query:
+            raise ValueError("query must be a non-empty exact string")
+        if top_k != self.config.candidate_pool_size:
+            raise ValueError("top_k must equal the frozen candidate pool size")
+        pids, ranks, scores = self._searcher.search(query, k=top_k)
+        if not (len(pids) == len(ranks) == len(scores) == top_k):
+            raise ValueError("ColBERT returned a non-canonical candidate count")
+        if tuple(int(rank) for rank in ranks) != tuple(range(1, top_k + 1)):
+            raise ValueError("ColBERT returned non-contiguous native ranks")
+        normalized_pids = tuple(int(pid) for pid in pids)
+        if len(set(normalized_pids)) != top_k:
+            raise ValueError("ColBERT returned duplicate PIDs")
+        if any(pid < 0 or pid >= len(self.pid_to_document_id) for pid in normalized_pids):
+            raise ValueError("ColBERT returned a PID outside the canonical corpus")
+        numeric_scores = tuple(float(score) for score in scores)
+        if any(not math.isfinite(score) for score in numeric_scores):
+            raise ValueError("ColBERT returned a non-finite score")
+        if any(left < right for left, right in zip(numeric_scores, numeric_scores[1:])):
+            raise ValueError("ColBERT scores are not in native descending order")
+        return tuple(
+            RawCandidateResult(
+                document_id=self.pid_to_document_id[pid],
+                native_score=score,
+            )
+            for pid, score in zip(normalized_pids, numeric_scores)
+        )

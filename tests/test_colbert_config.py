@@ -33,6 +33,7 @@ SCIENTIFIC_MUTATIONS = {
     "kmeans_niters": 8,
     "index_bsize": 32,
     "nranks": 2,
+    "amp": False,
     "seed": 54321,
     "candidate_pool_size": 10,
     "search_ncells": 4,
@@ -52,9 +53,8 @@ def test_every_frozen_colbert_field():
     assert COLBERT_CONFIG.checkpoint_id == "colbert-ir/colbertv2.0"
     assert COLBERT_CONFIG.checkpoint_revision == REVISION
     assert COLBERT_CONFIG.checkpoint_loading == (
-        "resolve the exact Hugging Face revision to a local immutable snapshot "
-        "path before Stanford ColBERT initialization; required by production "
-        "runtime; not yet implemented/enforced in this configuration-only milestone"
+        "resolve the pinned revision without fallback; validate and fingerprint "
+        "the physical checkpoint snapshot before canonical indexing"
     )
     assert COLBERT_CONFIG.dim == 128
     assert COLBERT_CONFIG.query_maxlen == 32
@@ -76,6 +76,7 @@ def test_every_frozen_colbert_field():
     assert COLBERT_CONFIG.kmeans_niters == 4
     assert COLBERT_CONFIG.index_bsize == 64
     assert COLBERT_CONFIG.nranks == 1
+    assert COLBERT_CONFIG.amp is True
     assert COLBERT_CONFIG.seed == 12345
     assert COLBERT_CONFIG.candidate_pool_size == 20
     assert COLBERT_CONFIG.search_ncells == 2
@@ -195,6 +196,8 @@ def test_search_threshold_is_canonicalized_to_float_in_scientific_identity():
         ("mask_punctuation", "true"),
         ("attend_to_mask_tokens", 0),
         ("attend_to_mask_tokens", "false"),
+        ("amp", 1),
+        ("amp", "true"),
     ],
 )
 def test_boolean_fields_require_strict_bool_type(field, value):

@@ -36,6 +36,7 @@ class ColBERTConfig:
     kmeans_niters: int
     index_bsize: int
     nranks: int
+    amp: bool
     seed: int
     candidate_pool_size: int
     search_ncells: int
@@ -103,7 +104,7 @@ class ColBERTConfig:
                 "search_centroid_score_threshold must be a finite non-boolean real"
             )
 
-        for name in ("mask_punctuation", "attend_to_mask_tokens"):
+        for name in ("mask_punctuation", "attend_to_mask_tokens", "amp"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
 
@@ -119,6 +120,7 @@ class ColBERTConfig:
         """
         return {
             "attend_to_mask_tokens": self.attend_to_mask_tokens,
+            "amp": self.amp,
             "backend": self.backend,
             "candidate_pool_size": self.candidate_pool_size,
             "checkpoint_id": self.checkpoint_id,
@@ -169,9 +171,8 @@ COLBERT_CONFIG = ColBERTConfig(
     checkpoint_id="colbert-ir/colbertv2.0",
     checkpoint_revision="0855eac81381e0323a846f1ed7d8452d4c648b50",
     checkpoint_loading=(
-        "resolve the exact Hugging Face revision to a local immutable snapshot "
-        "path before Stanford ColBERT initialization; required by production "
-        "runtime; not yet implemented/enforced in this configuration-only milestone"
+        "resolve the pinned revision without fallback; validate and fingerprint "
+        "the physical checkpoint snapshot before canonical indexing"
     ),
     dim=128,
     query_maxlen=32,
@@ -193,6 +194,7 @@ COLBERT_CONFIG = ColBERTConfig(
     kmeans_niters=4,
     index_bsize=64,
     nranks=1,
+    amp=True,
     seed=12345,
     candidate_pool_size=20,
     search_ncells=2,

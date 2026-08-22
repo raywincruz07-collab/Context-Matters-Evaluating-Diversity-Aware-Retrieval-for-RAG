@@ -62,3 +62,17 @@ def contriever_runtime_documents_from_corpus_records(
         }
         for record in corpus_records
     ]
+
+
+def colbert_runtime_collection_from_corpus_records(
+    *,
+    corpus_manifest: CorpusManifest,
+    corpus_records: tuple[CorpusRecord, ...],
+) -> tuple[tuple[str, ...], tuple[str | int, ...]]:
+    """Return exact collection text and the authoritative PID-to-ID mapping."""
+    validate_corpus_records_against_manifest(corpus_manifest, corpus_records)
+    collection = tuple(record.retrieval_content for record in corpus_records)
+    pid_to_document_id = tuple(record.document_id for record in corpus_records)
+    if len(collection) != corpus_manifest.document_count:
+        raise ValueError("ColBERT collection count does not match CorpusManifest")
+    return collection, pid_to_document_id

@@ -14,9 +14,11 @@ from typing import Any
 import numpy as np
 
 from retrievers.bm25_config import BM25_CONFIG, BM25Config
+from retrievers.colbert_config import COLBERT_CONFIG, ColBERTConfig
 from retrievers.contriever_config import CONTRIEVER_CONFIG, ContrieverConfig
 from retrievers.dpr_config import DPR_CONFIG, DPRConfig
 from retrieval_artifacts.contriever_cache_identity import ContrieverCacheIdentity
+from retrieval_artifacts.colbert_cache_identity import ColBERTCacheIdentity
 from retrieval_artifacts.corpus_manifest import CorpusManifest
 from retrieval_artifacts.dpr_cache_identity import DPRCacheIdentity
 from retrieval_artifacts.contracts import (
@@ -554,6 +556,87 @@ def build_contriever_retriever_provenance(
     )
 
 
+def _colbert_provenance_index_config(
+    cache_identity: ColBERTCacheIdentity,
+    colbert_config: ColBERTConfig,
+) -> str:
+    return json.dumps(
+        {
+            "checkpoint_snapshot_manifest_sha256": (
+                cache_identity.checkpoint_snapshot_manifest_sha256
+            ),
+            "colbert_config": colbert_config.scientific_payload(),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def build_colbert_retriever_provenance(
+    *,
+    cache_identity: ColBERTCacheIdentity,
+    index_artifact_sha256: str,
+    colbert_config: ColBERTConfig = COLBERT_CONFIG,
+) -> RetrieverProvenance:
+    """Build direct-Stanford ColBERT provenance with physical checkpoint binding."""
+    if not isinstance(cache_identity, ColBERTCacheIdentity):
+        raise TypeError("cache_identity must be a ColBERTCacheIdentity")
+    if cache_identity.colbert_config.scientific_json() != colbert_config.scientific_json():
+        raise ValueError("cache_identity ColBERTConfig does not match colbert_config")
+    _require_sha256(index_artifact_sha256, "index_artifact_sha256")
+    return RetrieverProvenance(
+        retriever_name=colbert_config.retriever_name,
+        implementation="retrievers.colbert_runtime.CanonicalColBERTRetriever",
+        library_name="colbert-ai",
+        library_version=colbert_config.colbert_ai_version,
+        model_id=colbert_config.checkpoint_id,
+        model_revision=colbert_config.checkpoint_revision,
+        tokenizer_id=colbert_config.checkpoint_id,
+        tokenizer_revision=colbert_config.checkpoint_revision,
+        query_preprocessing=colbert_config.query_preprocessing,
+        document_preprocessing=colbert_config.document_preprocessing,
+        normalization=(
+            "Stanford ColBERT learned projection and internal token-vector L2 "
+            "normalization; no external normalization"
+        ),
+        score_semantics=(
+            "native cosine MaxSim sum; higher score is better"
+        ),
+        index_type=colbert_config.index_engine,
+        index_config=_colbert_provenance_index_config(
+            cache_identity, colbert_config
+        ),
+        index_fingerprint_sha256=cache_identity.fingerprint_sha256,
+        index_artifact_sha256=index_artifact_sha256,
+    )
+
+
+def validate_colbert_index_binding(
+    *,
+    corpus_provenance: CorpusProvenance,
+    retriever_provenance: RetrieverProvenance,
+    cache_identity: ColBERTCacheIdentity,
+    colbert_config: ColBERTConfig = COLBERT_CONFIG,
+) -> None:
+    if not isinstance(cache_identity, ColBERTCacheIdentity):
+        raise TypeError("cache_identity must be a ColBERTCacheIdentity")
+    if cache_identity.colbert_config.scientific_json() != colbert_config.scientific_json():
+        raise ValueError("cache_identity ColBERTConfig does not match colbert_config")
+    expected = build_colbert_retriever_provenance(
+        cache_identity=cache_identity,
+        index_artifact_sha256=(retriever_provenance.index_artifact_sha256 or ""),
+        colbert_config=colbert_config,
+    )
+    if retriever_provenance != expected:
+        raise ValueError("ColBERT retriever provenance does not match canonical identity")
+    if cache_identity.corpus_manifest.sha256 != corpus_provenance.manifest_sha256:
+        raise ValueError("ColBERT cache corpus SHA does not match corpus provenance")
+    if cache_identity.corpus_manifest.document_count != corpus_provenance.document_count:
+        raise ValueError("ColBERT cache document count does not match corpus provenance")
+
+
 def validate_contriever_index_binding(
     *,
     corpus_provenance: CorpusProvenance,
@@ -942,6 +1025,88 @@ def produce_contriever_candidate_artifact(
             )
         )
 
+    return CandidateArtifact(
+        schema_version=CANDIDATE_SCHEMA_VERSION,
+        dataset=dataset_provenance,
+        corpus=corpus_provenance,
+        sample_id=sample_id,
+        query_text=query_text,
+        retriever=retriever_provenance,
+        requested_top_n=requested_top_n,
+        candidates=tuple(candidates),
+        producing_git_commit=producing_git_commit,
+        worktree_clean=worktree_clean,
+        environment_fingerprint_sha256=environment_fingerprint_sha256,
+    )
+
+
+def produce_colbert_candidate_artifact(
+    *,
+    sample_manifest: SampleManifest,
+    dataset_provenance: DatasetProvenance,
+    corpus_manifest: CorpusManifest,
+    corpus_provenance: CorpusProvenance,
+    cache_identity: ColBERTCacheIdentity,
+    sample_id: str | int,
+    query_text: str,
+    retriever_provenance: RetrieverProvenance,
+    requested_top_n: int,
+    raw_results: Sequence[RawCandidateResult],
+    corpus_records: tuple[CorpusRecord, ...],
+    producing_git_commit: str,
+    worktree_clean: bool,
+    environment_fingerprint_sha256: str,
+    colbert_config: ColBERTConfig = COLBERT_CONFIG,
+) -> CandidateArtifact:
+    """Validate and freeze one canonical native ColBERT candidate pool."""
+    if dataset_provenance != dataset_provenance_from_sample_manifest(sample_manifest):
+        raise ValueError("dataset_provenance does not match the supplied SampleManifest")
+    verify_manifest_sample(sample_manifest, sample_id=sample_id, query_text=query_text)
+    records = _validated_corpus_records(corpus_records)
+    expected_corpus = corpus_provenance_from_corpus_manifest(
+        corpus_manifest=corpus_manifest,
+        corpus_records=records,
+        dataset_provenance=dataset_provenance,
+    )
+    if corpus_provenance != expected_corpus:
+        raise ValueError("corpus_provenance does not match the validated CorpusManifest")
+    validate_colbert_index_binding(
+        corpus_provenance=corpus_provenance,
+        retriever_provenance=retriever_provenance,
+        cache_identity=cache_identity,
+        colbert_config=colbert_config,
+    )
+    if requested_top_n != colbert_config.candidate_pool_size:
+        raise ValueError("requested_top_n must equal the frozen candidate pool size")
+    if isinstance(raw_results, (str, bytes)) or not isinstance(raw_results, Sequence):
+        raise TypeError("raw_results must be an ordered sequence")
+    results = tuple(raw_results)
+    if len(results) != requested_top_n:
+        raise ValueError("ColBERT raw result count must equal requested_top_n")
+    if not all(isinstance(result, RawCandidateResult) for result in results):
+        raise TypeError("raw_results must contain RawCandidateResult objects")
+    result_ids = [result.document_id for result in results]
+    if len(set(result_ids)) != len(result_ids):
+        raise ValueError("raw result document_id values must be unique")
+    scores = [float(result.native_score) for result in results]
+    if any(left < right for left, right in zip(scores, scores[1:])):
+        raise ValueError("ColBERT raw scores must be in native descending order")
+    records_by_id = {record.document_id: record for record in records}
+    candidates = []
+    for rank, result in enumerate(results, start=1):
+        if result.document_id not in records_by_id:
+            raise ValueError(
+                f"raw result document_id is absent from corpus: {result.document_id!r}"
+            )
+        record = records_by_id[result.document_id]
+        candidates.append(CandidateEntry(
+            rank=rank,
+            document_id=record.document_id,
+            source_document_id=record.source_document_id,
+            corpus_position=record.corpus_position,
+            native_score=result.native_score,
+            document_content_sha256=document_content_sha256(record.retrieval_content),
+        ))
     return CandidateArtifact(
         schema_version=CANDIDATE_SCHEMA_VERSION,
         dataset=dataset_provenance,
