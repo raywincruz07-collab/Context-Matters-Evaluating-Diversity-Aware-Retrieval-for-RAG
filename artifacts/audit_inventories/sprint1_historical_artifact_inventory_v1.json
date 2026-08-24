@@ -1,0 +1,267 @@
+{
+  "aggregate": {
+    "known_anomaly_count": 1,
+    "result_file_count": 4,
+    "retrieved_document_cardinality_counts": {
+      "1": 1,
+      "5": 3999
+    },
+    "source_hashes_unchanged_during_validation": true,
+    "status_counts": {
+      "OK": 4000
+    },
+    "total_rows": 4000
+  },
+  "artifact_format": "context-matters.sprint1-historical-artifact-audit.v1",
+  "git_identity": {
+    "commit": "ba10425ff331c214cdb0da6c274213d1a2a06d0d",
+    "worktree_clean": false
+  },
+  "historical_contract": {
+    "dataset": "PubMedQA PQA-L1000",
+    "evidence_role": "HISTORICAL_OBSERVED",
+    "expected_result_file_count": 4,
+    "expected_rows_per_result_file": 1000,
+    "expected_status": "OK",
+    "expected_unique_qa_ids_per_result_file": 1000,
+    "generator": "ministral-3-14b",
+    "max_tokens": 512,
+    "temperature": 0.0,
+    "top_k": 5
+  },
+  "metadata": {
+    "generator_config": {
+      "llm_host": "https://maki.uni-mannheim.de/v1",
+      "llm_model": "ministral-3-14b",
+      "llm_provider": "Mannheim Maki OpenAI-compatible API",
+      "max_tokens": 512,
+      "temperature": 0.0,
+      "top_k": 5
+    },
+    "retrievers": [
+      "bm25",
+      "dpr",
+      "contriever",
+      "colbertv2"
+    ],
+    "sha256": "3f1a681384ff47615a4345ed6cf017beed85f7794acaba5778a315dc97d48002",
+    "source_path": "results/sprint1/raw/EXPERIMENT_METADATA.json",
+    "with_generation": true
+  },
+  "question_identity": {
+    "common_unique_qa_count": 1000,
+    "exact_order_consistent_across_retrievers": true,
+    "ordered_qa_ids_sha256": "cb88c247513aefa5aa24be76cb5df285105ff4041dc4eda601082af9cf3f075f"
+  },
+  "result_files": [
+    {
+      "anomalies": [
+        {
+          "code": "KNOWN_BM25_ONE_DOCUMENT_ROW",
+          "disposition": "preserved_as_historical_observation",
+          "qa_id": "60",
+          "question_index": "60",
+          "retrieved_doc_ids": [
+            202
+          ],
+          "row_status": "OK"
+        }
+      ],
+      "generator": "ministral-3-14b",
+      "max_tokens": 512,
+      "metric_field_validation": {
+        "exact_match": {
+          "maximum": 0.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "f1": {
+          "maximum": 0.5057471264367817,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "mrr": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "recall_at_k": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "rouge_l": {
+          "maximum": 0.3939393939393939,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        }
+      },
+      "retrieved_document_cardinality_counts": {
+        "1": 1,
+        "5": 999
+      },
+      "retriever": "bm25",
+      "row_count": 1000,
+      "sha256": "2e007274d74eb1ec44b910adc76c7748d9b77bd5e32487e841df97a859d977d0",
+      "source_path": "results/sprint1/raw/fullrag_bm25_top5.csv",
+      "status_counts": {
+        "OK": 1000
+      },
+      "temperature": 0.0,
+      "unique_qa_count": 1000
+    },
+    {
+      "anomalies": [],
+      "generator": "ministral-3-14b",
+      "max_tokens": 512,
+      "metric_field_validation": {
+        "exact_match": {
+          "maximum": 0.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "f1": {
+          "maximum": 0.47482014388489213,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "mrr": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "recall_at_k": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "rouge_l": {
+          "maximum": 0.3597122302158274,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        }
+      },
+      "retrieved_document_cardinality_counts": {
+        "5": 1000
+      },
+      "retriever": "dpr",
+      "row_count": 1000,
+      "sha256": "9258928b4691cc7eece6f7ca26d964977a70076ccf0b528bf798946125803518",
+      "source_path": "results/sprint1/raw/fullrag_dpr_top5.csv",
+      "status_counts": {
+        "OK": 1000
+      },
+      "temperature": 0.0,
+      "unique_qa_count": 1000
+    },
+    {
+      "anomalies": [],
+      "generator": "ministral-3-14b",
+      "max_tokens": 512,
+      "metric_field_validation": {
+        "exact_match": {
+          "maximum": 0.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "f1": {
+          "maximum": 0.46715328467153283,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "mrr": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "recall_at_k": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "rouge_l": {
+          "maximum": 0.3870967741935483,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        }
+      },
+      "retrieved_document_cardinality_counts": {
+        "5": 1000
+      },
+      "retriever": "contriever",
+      "row_count": 1000,
+      "sha256": "b17ec564df77dee58ea1e5f2ef74d82cbe903de86fd83a8b9097f87674251c05",
+      "source_path": "results/sprint1/raw/fullrag_contriever_top5.csv",
+      "status_counts": {
+        "OK": 1000
+      },
+      "temperature": 0.0,
+      "unique_qa_count": 1000
+    },
+    {
+      "anomalies": [],
+      "generator": "ministral-3-14b",
+      "max_tokens": 512,
+      "metric_field_validation": {
+        "exact_match": {
+          "maximum": 0.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "f1": {
+          "maximum": 0.4888888888888889,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "mrr": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "recall_at_k": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        },
+        "rouge_l": {
+          "maximum": 0.3709677419354838,
+          "minimum": 0.0,
+          "present": true,
+          "valid_count": 1000
+        }
+      },
+      "retrieved_document_cardinality_counts": {
+        "5": 1000
+      },
+      "retriever": "colbertv2",
+      "row_count": 1000,
+      "sha256": "1dad45c4039f75e09257226c53239deccb99beec0cf933c2789c2a67fc380a41",
+      "source_path": "results/sprint1/raw/fullrag_colbertv2_top5.csv",
+      "status_counts": {
+        "OK": 1000
+      },
+      "temperature": 0.0,
+      "unique_qa_count": 1000
+    }
+  ],
+  "validator_version": "sprint1_historical_artifact_validator_v1"
+}
