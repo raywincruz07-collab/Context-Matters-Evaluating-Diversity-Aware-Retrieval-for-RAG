@@ -57,6 +57,7 @@ from scripts.run_pubmedqa_contriever_candidates import (
 from run_registry import (
     EVIDENCE_AUTHORITY_SCHEMA_VERSION,
     REGISTRY_HEADER,
+    RunRecordValidationError,
     RunRegistryConflictError,
     append_run_record,
     canonical_json,
@@ -839,6 +840,91 @@ def test_governed_same_environment_resume_allows_hardware_change_and_binds_outpu
     ).production_fingerprint_sha256
     assert summary.run_id == first_running["run_id"]
     assert summary.attempt_count == 2
+
+
+def test_governed_runner_rejects_retrieval_attempt_four_before_retrieval(
+    monkeypatch, tmp_path
+):
+    fixture = _governed_fixture(tmp_path)
+    first = _append_first_running_attempt(fixture)
+    second = running_candidate_record(
+        first,
+        started_at="2026-08-24T10:00:01Z",
+        attempt_count=2,
+        environment_sha256=ENV_SHA,
+        runtime_sha256=RUNTIME_SHA,
+        hardware_summary="machine-b",
+        prior_failure_reason="attempt 1 infrastructure interruption",
+        evidence_authority_path=fixture.authority_path,
+    )
+    append_run_record(
+        fixture.registry_path,
+        second,
+        evidence_authority_path=fixture.authority_path,
+    )
+    third = running_candidate_record(
+        second,
+        started_at="2026-08-24T10:00:01Z",
+        attempt_count=3,
+        environment_sha256=ENV_SHA,
+        runtime_sha256=RUNTIME_SHA,
+        hardware_summary="machine-c",
+        prior_failure_reason="attempt 2 infrastructure interruption",
+        evidence_authority_path=fixture.authority_path,
+    )
+    append_run_record(
+        fixture.registry_path,
+        third,
+        evidence_authority_path=fixture.authority_path,
+    )
+    retrieval_calls = []
+
+    def forbidden_retrieval(**kwargs):
+        retrieval_calls.append(kwargs)
+        raise AssertionError("retrieval must not start after the attempt ceiling")
+
+    monkeypatch.setattr(
+        runner_module,
+        "run_pubmedqa_contriever_candidates",
+        forbidden_retrieval,
+    )
+    monkeypatch.setattr(runner_module, "REPOSITORY_ROOT", tmp_path)
+
+    with pytest.raises(
+        RunRecordValidationError,
+        match="RETRIEVAL permits at most 3 total attempts",
+    ):
+        run_governed_pubmedqa_contriever_candidates(
+            runtime=fixture.runtime,
+            retriever=object(),
+            local_index=fixture.local_index,
+            output_dir=fixture.output_dir,
+            transformers_version=TRANSFORMERS_VERSION,
+            environment_fingerprint_sha256=ENV_SHA,
+            runtime_fingerprint_sha256=RUNTIME_SHA,
+            plan=fixture.plan,
+            plan_payload=fixture.plan_payload,
+            planned_record=third,
+            registry_path=fixture.registry_path,
+            evidence_authority_path=fixture.authority_path,
+            run_artifact_root=fixture.run_artifact_root,
+            candidate_set_path=fixture.candidate_set_path,
+            hardware_summary="machine-d",
+            resume_reason="attempt 3 infrastructure interruption",
+            timestamp=lambda: "2026-08-24T10:00:02Z",
+        )
+
+    assert retrieval_calls == []
+    records = read_registry(
+        fixture.registry_path,
+        evidence_authority_path=fixture.authority_path,
+    )
+    assert [record["execution"]["attempt_count"] for record in records] == [
+        0,
+        1,
+        2,
+        3,
+    ]
 
 
 @pytest.mark.parametrize(

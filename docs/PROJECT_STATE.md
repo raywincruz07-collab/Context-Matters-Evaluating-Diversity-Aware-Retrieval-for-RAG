@@ -404,7 +404,8 @@ implementations are required before canonical evaluation.
 
 - run-registry integration into remaining canonical runners before their
   prospective execution; the PubMedQA Contriever missing-only path is ready
-  for a governed read-only preflight;
+  for a final clean-HEAD confirmation after the prospective three-attempt
+  retrieval infrastructure ceiling was documented and centrally enforced;
 - dataset/run configuration bundles and generation/evaluator output schemas;
 - full current PubMedQA Contriever/ColBERT candidate materialization;
 - HotpotQA and ASQA source acquisition, manifests, full corpora, indexes, and
@@ -518,15 +519,17 @@ backfills in separate, explicitly labelled run directories.
 
 - Mode: EXECUTION STARTED
 - Current sprint: SPRINT 1 COMPLETION
-- Last completed: Governed missing-only PubMedQA candidate-production runner
-  implemented, tested, and independently verified
-- Current task: Contriever PubMedQA 997-missing-candidate clean-HEAD preflight
+- Last completed: Contriever clean-HEAD preflight identified and corrected
+  frozen retrieval retry ceiling enforcement
+- Current task: Contriever Stage-1 final preflight confirmation
 - Current candidate status:
   - BM25: 1,000/1,000 reusable
   - DPR: 1,000/1,000 reusable
   - Contriever: 3/1,000 reusable; missing exactly IDs 3–999
   - ColBERTv2: 0/1,000
 - Production registry: 0 experiment records
+- Lifecycle-correction verification: 48 registry tests, 46 focused
+  candidate-production/Contriever tests, and 1,287 full-repository tests passed
 - SELECTION: BLOCKED pending professor numeric-rule adjudication
 - Protected-final execution: NOT STARTED
 - Experiments launched: none; the production registry contains zero experiment
@@ -535,9 +538,10 @@ backfills in separate, explicitly labelled run directories.
 - Pre-execution dependency: retain mandatory runner integration for every
   prospective execution; the governed Contriever path is implemented, while
   remaining canonical runners still require integration
-- Next action: perform a read-only clean-HEAD preflight for the governed
-  Contriever Stage-1 prospective run; do not register or execute until the
-  preflight passes
+- Next action: commit the lifecycle correction, then perform a focused
+  read-only confirmation that Gate 14 passes and all previously validated
+  scientific identities remain unchanged before registering or executing the
+  Contriever Stage-1 run
 - Branch: `sprint3`
 - Checkpoint parent HEAD: `32a2ecc5cebec189086287040c96fb80f10389e7`
 - Registry implementation audit-start working tree: clean
@@ -549,8 +553,10 @@ backfills in separate, explicitly labelled run directories.
 
 ## Exact next action
 
-Perform a read-only clean-HEAD preflight for the governed Contriever Stage-1
-prospective run. Do not register or execute until the preflight passes.
+Commit the retrieval lifecycle correction, then perform a focused read-only
+confirmation that Gate 14 passes and all previously validated scientific
+identities remain unchanged. Do not register or execute the Contriever Stage-1
+prospective run until that clean-HEAD confirmation passes.
 
 ## Known contradictions and superseded statements
 

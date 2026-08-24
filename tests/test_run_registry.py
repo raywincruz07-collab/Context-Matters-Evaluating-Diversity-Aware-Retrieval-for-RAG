@@ -219,7 +219,7 @@ def _failed(record, reason="fixture infrastructure failure", *, attempt=3):
     return validate_run_record(updated)
 
 
-def _complete(record, output_path: Path, repository_root: Path):
+def _complete(record, output_path: Path, repository_root: Path, *, attempt=1):
     updated = deepcopy(record)
     artifact = output_artifact(
         output_path,
@@ -233,7 +233,8 @@ def _complete(record, output_path: Path, repository_root: Path):
             "started_at": "2026-08-24T10:00:01Z",
             "completed_at": "2026-08-24T10:00:02Z",
             "status": "COMPLETE",
-            "attempt_count": 1,
+            "attempt_count": attempt,
+            "resume_of": record["run_id"] if attempt > 1 else None,
         }
     )
     updated["output"].update(
@@ -248,6 +249,22 @@ def _complete(record, output_path: Path, repository_root: Path):
         }
     )
     return validate_run_record(updated)
+
+
+def _retrieval_planned_record():
+    record = deepcopy(_planned_record())
+    record.pop("run_id")
+    record.update(
+        {
+            "run_type": "RETRIEVAL",
+            "context_mode": None,
+            "diversification": None,
+            "generation": None,
+        }
+    )
+    record["retrieval"]["candidate_set"] = None
+    record["retrieval"]["selected_context"] = None
+    return finalize_planned_record(record)
 
 
 def _write_authority(path: Path, entries):
@@ -916,6 +933,77 @@ def test_attempt_count_monotonicity_cap_and_resume_lineage_are_enforced(tmp_path
     )
     with pytest.raises(RunRegistryConflictError, match="resume_of=run_id"):
         append_run_record(registry, missing_lineage)
+
+
+def test_retrieval_attempts_one_through_three_are_valid_and_four_is_rejected():
+    planned = _retrieval_planned_record()
+    first = _running(planned, attempt=1)
+    second = _running(
+        planned,
+        attempt=2,
+        resume=True,
+        prior_failure_reason="attempt 1 infrastructure interruption",
+    )
+    third = _running(
+        planned,
+        attempt=3,
+        resume=True,
+        prior_failure_reason="attempt 2 infrastructure interruption",
+    )
+
+    assert {planned["run_id"], first["run_id"], second["run_id"], third["run_id"]} == {
+        planned["run_id"]
+    }
+    assert [
+        first["execution"]["attempt_count"],
+        second["execution"]["attempt_count"],
+        third["execution"]["attempt_count"],
+    ] == [1, 2, 3]
+
+    with pytest.raises(RunRecordValidationError, match="RETRIEVAL permits at most 3"):
+        _running(
+            planned,
+            attempt=4,
+            resume=True,
+            prior_failure_reason="attempt 3 infrastructure interruption",
+        )
+
+
+def test_retrieval_terminal_snapshots_use_the_actual_preceding_attempt(tmp_path):
+    planned = _retrieval_planned_record()
+    first = _running(planned, attempt=1)
+
+    failed_one_registry = tmp_path / "retrieval-failed-one.jsonl"
+    append_run_record(failed_one_registry, planned)
+    append_run_record(failed_one_registry, first)
+    append_run_record(failed_one_registry, _failed(planned, attempt=1))
+    failed_one = read_registry(failed_one_registry)[-1]
+    assert failed_one["execution"]["status"] == "FAILED"
+    assert failed_one["execution"]["attempt_count"] == 1
+
+    completed_two_registry = tmp_path / "retrieval-completed-two.jsonl"
+    output_path = tmp_path / "retrieval-attempt-two-output.jsonl"
+    output_path.write_text("fixture output\n", encoding="utf-8")
+    second = _running(
+        planned,
+        attempt=2,
+        resume=True,
+        prior_failure_reason="attempt 1 infrastructure interruption",
+    )
+    complete_two = _complete(planned, output_path, tmp_path, attempt=2)
+    append_run_record(completed_two_registry, planned)
+    append_run_record(completed_two_registry, first)
+    append_run_record(completed_two_registry, second)
+    append_run_record(completed_two_registry, complete_two)
+    completed_two = read_registry(completed_two_registry)[-1]
+    assert completed_two["execution"]["status"] == "COMPLETE"
+    assert completed_two["execution"]["attempt_count"] == 2
+
+    jumped_registry = tmp_path / "retrieval-jumped-failure.jsonl"
+    append_run_record(jumped_registry, planned)
+    append_run_record(jumped_registry, first)
+    with pytest.raises(RunRegistryConflictError, match="immediately preceding"):
+        append_run_record(jumped_registry, _failed(planned, attempt=3))
 
 
 def test_terminal_failure_uses_actual_immediately_preceding_attempt(tmp_path):

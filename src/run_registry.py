@@ -77,6 +77,10 @@ DIVERSIFICATION_METHODS = frozenset(
 )
 CANONICAL_CANDIDATE_POOL = 20
 CANONICAL_TOP_K = 5
+MAX_INFRASTRUCTURE_ATTEMPTS_BY_RUN_TYPE = {
+    "GENERATION": 3,
+    "RETRIEVAL": 3,
+}
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -854,8 +858,11 @@ def _validate_execution(
     attempts = _require_nonnegative_int(
         execution["attempt_count"], "execution.attempt_count"
     )
-    if run_type == "GENERATION" and attempts > 3:
-        raise RunRecordValidationError("GENERATION permits at most 3 total attempts")
+    max_attempts = MAX_INFRASTRUCTURE_ATTEMPTS_BY_RUN_TYPE.get(run_type)
+    if max_attempts is not None and attempts > max_attempts:
+        raise RunRecordValidationError(
+            f"{run_type} permits at most {max_attempts} total attempts"
+        )
     reason = _require_optional_text(
         execution["failure_reason"], "execution.failure_reason"
     )
