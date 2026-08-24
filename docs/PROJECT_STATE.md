@@ -150,7 +150,7 @@ Status vocabulary:
 | 6 | DPR implementation | **A** | Historical original Facebook dual encoder executed in all 1,000 Sprint-1 rows. Current `src/retrievers/dpr_original_retriever.py` pins the question/context encoders and manifest-bound FAISS identity; 1,000 local PubMedQA top-20 candidate artifacts exist. | Full-corpus HotpotQA/ASQA indexing and candidate production remain. |
 | 7 | Contriever implementation | **A** | Historical `facebook/contriever` execution produced 1,000 Sprint-1 rows. Current frozen config/runtime/provenance and candidate runner exist under `src/retrievers/` and `scripts/`; a validated 3,358-by-768 local index exists. | Current PubMedQA candidate materialization is only 3/1,000; full HotpotQA/ASQA execution remains. |
 | 8 | ColBERTv2 implementation | **A** | Historical RAGatouille ColBERTv2 produced 1,000 Sprint-1 rows. Current canonical direct Stanford ColBERT implementation, immutable checkpoint policy, runtime adapter, candidate runner, environment locks, and tests are tracked. | No local current PubMedQA candidate artifacts exist; RunPod GPU validation and all required index/candidate executions remain. |
-| 9 | Common retriever interface/comparable outputs | **B** | Historical `BaseRetriever`/factory and uniform CSV schema enabled four-way Sprint-1 execution. Current `src/retrieval_artifacts/` defines a stronger common top-20 artifact contract. The governed `src/run_registry.py` supplies shared run/provenance and aggregate candidate-set identity, but it is not integrated into canonical runners. Only PubMedQA producers exist and current local completion is BM25 1,000, DPR 1,000, Contriever 3, ColBERTv2 0. The legacy general pipeline is not the canonical Sprint-3 runner. | Integrate the registry, complete dataset producers and candidate artifacts, and quarantine legacy paths from canonical execution. |
+| 9 | Common retriever interface/comparable outputs | **B** | Historical `BaseRetriever`/factory and uniform CSV schema enabled four-way Sprint-1 execution. Current `src/retrieval_artifacts/` defines a stronger common top-20 artifact contract. The PubMedQA Contriever producer now has governed exact missing-ID planning, registry lifecycle hooks, resume-safe artifact preservation, output inventory, and complete-set finalization. Only PubMedQA producers exist and current local completion remains BM25 1,000, DPR 1,000, Contriever 3, ColBERTv2 0. The legacy general pipeline is not the canonical Sprint-3 runner. | Integrate the same governed layer into remaining canonical runners, complete candidate artifacts, and quarantine legacy paths from canonical execution. |
 | 10 | Historical PubMedQA relevance-only top-5 runs | **A** | Four files in `results/sprint1/raw/fullrag_*_top5.csv`; 1,000 unique questions per retriever, 4,000 parsed rows total. | No rerun to rewrite history. Prospective comparison backfills remain separate. |
 | 11 | Historical generator/model actually used | **A** | `results/sprint1/raw/EXPERIMENT_METADATA.json`, every raw row, notebook outputs, and the originating commit agree on Mannheim Maki `ministral-3-14b`. | None for historical identity. Physical provider revision is not recorded and cannot be retroactively invented. |
 | 12 | Historical prompt/decoding actually used | **A** | Exact prompt code is in `config.py`/`generator.py` at `20c94b3`; metadata and notebook bind `temperature=0.0`, `max_tokens=512`, `top_k=5`, and `MAKI_DEFAULT_CTX=7680`. The request contained one user message and no separate system message. | Preserve as historical. New runs must use `GENERATION_PROTOCOL.md`, not this prompt. |
@@ -402,7 +402,9 @@ implementations are required before canonical evaluation.
 
 ## Missing work
 
-- run-registry integration into canonical runners before prospective execution;
+- run-registry integration into remaining canonical runners before their
+  prospective execution; the PubMedQA Contriever missing-only path is ready
+  for a governed read-only preflight;
 - dataset/run configuration bundles and generation/evaluator output schemas;
 - full current PubMedQA Contriever/ColBERT candidate materialization;
 - HotpotQA and ASQA source acquisition, manifests, full corpora, indexes, and
@@ -516,20 +518,26 @@ backfills in separate, explicitly labelled run directories.
 
 - Mode: EXECUTION STARTED
 - Current sprint: SPRINT 1 COMPLETION
-- Last completed: Governed run-registry/provenance implementation, hardening,
-  and independent verification
-- Current task: PubMedQA candidate-artifact audit
+- Last completed: Governed missing-only PubMedQA candidate-production runner
+  implemented, tested, and independently verified
+- Current task: Contriever PubMedQA 997-missing-candidate clean-HEAD preflight
+- Current candidate status:
+  - BM25: 1,000/1,000 reusable
+  - DPR: 1,000/1,000 reusable
+  - Contriever: 3/1,000 reusable; missing exactly IDs 3–999
+  - ColBERTv2: 0/1,000
+- Production registry: 0 experiment records
 - SELECTION: BLOCKED pending professor numeric-rule adjudication
 - Protected-final execution: NOT STARTED
 - Experiments launched: none; the production registry contains zero experiment
   records, historical Sprint-1/Sprint-2 evidence remains unchanged, and no
   scientific result is compromised
-- Pre-execution dependency: integrate mandatory run registration into every
-  canonical runner before prospective execution
-- Next action: perform a read-only audit of the existing current-protocol
-  PubMedQA Top-20 candidate artifacts for BM25, DPR, Contriever, and ColBERTv2
-  to determine exactly what is valid/reusable and what is missing before any
-  new candidate generation
+- Pre-execution dependency: retain mandatory runner integration for every
+  prospective execution; the governed Contriever path is implemented, while
+  remaining canonical runners still require integration
+- Next action: perform a read-only clean-HEAD preflight for the governed
+  Contriever Stage-1 prospective run; do not register or execute until the
+  preflight passes
 - Branch: `sprint3`
 - Checkpoint parent HEAD: `32a2ecc5cebec189086287040c96fb80f10389e7`
 - Registry implementation audit-start working tree: clean
@@ -541,12 +549,8 @@ backfills in separate, explicitly labelled run directories.
 
 ## Exact next action
 
-Perform a READ-ONLY audit of the existing current-protocol PubMedQA Top-20
-candidate artifacts for BM25, DPR, Contriever, and ColBERTv2. Determine exactly
-what is valid/reusable and what is missing before any new candidate generation.
-Every prospective execution must be registered before it starts; canonical
-runner integration remains a separate pre-execution dependency. The candidate
-audit itself is read-only and does not require launching a new experiment.
+Perform a read-only clean-HEAD preflight for the governed Contriever Stage-1
+prospective run. Do not register or execute until the preflight passes.
 
 ## Known contradictions and superseded statements
 

@@ -1,4 +1,5 @@
 from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,7 @@ from retrieval_artifacts import (
     SampleManifest,
     SampleManifestEntry,
     build_contriever_cache_identity,
+    build_contriever_retriever_provenance,
     candidate_artifact_payload,
     corpus_provenance_from_corpus_manifest,
     dataset_provenance_from_sample_manifest,
@@ -28,6 +30,12 @@ from retrieval_artifacts import (
     produce_contriever_candidate_artifact,
     query_text_sha256,
     read_candidate_artifact,
+)
+from retrieval_artifacts.candidate_production import (
+    build_retrieval_planned_record,
+    candidate_production_plan_scientific_payload,
+    plan_candidate_production,
+    running_candidate_record,
 )
 from retrievers.contriever_config import CONTRIEVER_CONFIG
 from scripts.build_corpus_manifests import (
@@ -39,9 +47,20 @@ from scripts.run_pubmedqa_contriever_candidates import (
     CANDIDATE_POOL_SIZE,
     DEFAULT_OUTPUT_DIR,
     ContrieverCandidatePoolSizeError,
+    LocalContrieverIndexIdentity,
     _environment_fingerprint,
     build_runtime_contriever_provenance,
+    run_governed_pubmedqa_contriever_candidates,
     run_pubmedqa_contriever_candidates,
+    validate_local_contriever_index_identity,
+)
+from run_registry import (
+    EVIDENCE_AUTHORITY_SCHEMA_VERSION,
+    REGISTRY_HEADER,
+    RunRegistryConflictError,
+    append_run_record,
+    canonical_json,
+    read_registry,
 )
 
 
@@ -50,6 +69,7 @@ ENV_SHA = "2" * 64
 INDEX_SHA = "3" * 64
 EMBEDDING_SHA = "4" * 64
 TRANSFORMERS_VERSION = "fixture-transformers-version"
+RUNTIME_SHA = "5" * 64
 
 
 def sample_manifest():
@@ -212,6 +232,159 @@ def run(output_dir, retriever=None, **changes):
     return run_pubmedqa_contriever_candidates(**values)
 
 
+def _governed_fixture(tmp_path, *, preexisting=False):
+    active_runtime = runtime()
+    output_dir = tmp_path / "candidates"
+    if preexisting:
+        run(output_dir, max_samples=1)
+    cache_identity = build_contriever_cache_identity(
+        corpus_manifest=active_runtime.corpus_manifest,
+        contriever_config=CONTRIEVER_CONFIG,
+    )
+    provenance = build_contriever_retriever_provenance(
+        cache_identity=cache_identity,
+        index_artifact_sha256=INDEX_SHA,
+        transformers_version=TRANSFORMERS_VERSION,
+    )
+    local_index = LocalContrieverIndexIdentity(
+        cache_fingerprint_sha256=cache_identity.fingerprint_sha256,
+        embedding_path=tmp_path / "fixture.npy",
+        embedding_artifact_sha256=EMBEDDING_SHA,
+        index_path=tmp_path / "fixture.faiss",
+        index_artifact_sha256=INDEX_SHA,
+        metadata_path=tmp_path / "fixture.json",
+        retriever_provenance=provenance,
+        cache_environment={"device": "cpu"},
+    )
+    plan = plan_candidate_production(
+        sample_manifest=active_runtime.sample_manifest,
+        ordered_queries=active_runtime.ordered_queries,
+        candidate_directory=output_dir,
+        dataset_provenance=active_runtime.dataset_provenance,
+        corpus_provenance=active_runtime.corpus_provenance,
+        retriever_provenance=provenance,
+        corpus_records=active_runtime.corpus_records,
+        candidate_pool=CANDIDATE_POOL_SIZE,
+    )
+    plan_payload = candidate_production_plan_scientific_payload(
+        dataset="pubmedqa",
+        evidence_role="HISTORICAL_OBSERVED_CONTROL_REPLICATION",
+        sample_manifest_id=active_runtime.sample_manifest.manifest_id,
+        corpus_manifest_id=active_runtime.corpus_manifest.corpus_manifest_id,
+        retriever="contriever",
+        retriever_config_sha256=hashlib.sha256(
+            CONTRIEVER_CONFIG.scientific_json().encode("utf-8")
+        ).hexdigest(),
+        index_artifact_id=f"index:sha256:{cache_identity.fingerprint_sha256}",
+        candidate_pool=CANDIDATE_POOL_SIZE,
+        top_k=5,
+        candidate_directory="candidates",
+        scheduled_sample_ids=plan.scheduled_sample_ids,
+    )
+    authority_path = tmp_path / "authority.json"
+    authority_path.write_text(
+        json.dumps(
+            {
+                "schema_version": EVIDENCE_AUTHORITY_SCHEMA_VERSION,
+                "authorities": [
+                    {
+                        "dataset": "pubmedqa",
+                        "evidence_role": (
+                            "HISTORICAL_OBSERVED_CONTROL_REPLICATION"
+                        ),
+                        "sample_manifest_id": (
+                            active_runtime.sample_manifest.manifest_id
+                        ),
+                        "sample_manifest_path": "fixture/sample.json",
+                        "authority_protocols": ["fixture/protocol.md"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact = lambda path, sha256, artifact_id: {
+        "path": path,
+        "sha256": sha256,
+        "artifact_id": artifact_id,
+    }
+    planned = build_retrieval_planned_record(
+        created_at="2026-08-24T10:00:00Z",
+        plan_payload=plan_payload,
+        git={
+            "commit": GIT_SHA,
+            "branch": "sprint3",
+            "worktree_clean": True,
+            "worktree_diff_sha256": None,
+        },
+        data={
+            "dataset": "pubmedqa",
+            "split": "fixture-split",
+            "source": "fixture-source",
+            "revision": "fixture-revision",
+            "sample_manifest": artifact(
+                "fixture/sample.json",
+                "6" * 64,
+                active_runtime.sample_manifest.manifest_id,
+            ),
+            "corpus_manifest": artifact(
+                "fixture/corpus.json",
+                "7" * 64,
+                active_runtime.corpus_manifest.corpus_manifest_id,
+            ),
+        },
+        retrieval_index=artifact(
+            "fixture/index.faiss",
+            INDEX_SHA,
+            f"index:sha256:{cache_identity.fingerprint_sha256}",
+        ),
+        environment_sha256=ENV_SHA,
+        runtime_sha256=RUNTIME_SHA,
+        hardware_summary="machine-a",
+        output_directory="candidates",
+        evidence_authority_path=authority_path,
+    )
+    registry_path = tmp_path / "registry.jsonl"
+    registry_path.write_text(
+        canonical_json(REGISTRY_HEADER) + "\n", encoding="utf-8"
+    )
+    return SimpleNamespace(
+        runtime=active_runtime,
+        output_dir=output_dir,
+        local_index=local_index,
+        plan=plan,
+        plan_payload=plan_payload,
+        planned=planned,
+        authority_path=authority_path,
+        registry_path=registry_path,
+        run_artifact_root=tmp_path / "runs",
+        candidate_set_path=tmp_path / "candidate-set.json",
+    )
+
+
+def _append_first_running_attempt(fixture):
+    append_run_record(
+        fixture.registry_path,
+        fixture.planned,
+        evidence_authority_path=fixture.authority_path,
+    )
+    running = running_candidate_record(
+        fixture.planned,
+        started_at="2026-08-24T10:00:01Z",
+        attempt_count=1,
+        environment_sha256=ENV_SHA,
+        runtime_sha256=RUNTIME_SHA,
+        hardware_summary="machine-a",
+        evidence_authority_path=fixture.authority_path,
+    )
+    append_run_record(
+        fixture.registry_path,
+        running,
+        evidence_authority_path=fixture.authority_path,
+    )
+    return running
+
+
 def test_constants_paths_index_once_and_exact_producer_inputs(tmp_path):
     assert CANDIDATE_POOL_SIZE == 20
     assert DEFAULT_OUTPUT_DIR == (
@@ -342,6 +515,72 @@ def test_runtime_provenance_is_canonical_and_binding_validator_runs(monkeypatch)
         )
 
 
+def test_local_index_identity_rederived_from_metadata_without_model(monkeypatch, tmp_path):
+    active_runtime = runtime()
+    identity = build_contriever_cache_identity(
+        corpus_manifest=active_runtime.corpus_manifest,
+        contriever_config=CONTRIEVER_CONFIG,
+    )
+    embeddings = tmp_path / "embeddings"
+    indexes = tmp_path / "indexes"
+    embeddings.mkdir()
+    indexes.mkdir()
+    embedding_path = embeddings / identity.embedding_cache_filename
+    index_path = indexes / identity.faiss_cache_filename
+    embedding_path.write_bytes(b"fixture embeddings")
+    index_path.write_bytes(b"fixture index")
+    embedding_sha = hashlib.sha256(embedding_path.read_bytes()).hexdigest()
+    index_sha = hashlib.sha256(index_path.read_bytes()).hexdigest()
+    metadata = {
+        "cache_fingerprint_sha256": identity.fingerprint_sha256,
+        "cache_identity_schema_version": identity.schema_version,
+        "cache_schema_version": runner_module.CONTRIEVER_CACHE_METADATA_SCHEMA_VERSION,
+        "corpus_manifest_id": active_runtime.corpus_manifest.corpus_manifest_id,
+        "corpus_manifest_sha256": active_runtime.corpus_manifest.sha256,
+        "contriever_scientific_json": CONTRIEVER_CONFIG.scientific_json(),
+        "scientific_payload": identity.scientific_payload(),
+        "embedding": {
+            "document_count": active_runtime.corpus_manifest.document_count,
+            "dtype": CONTRIEVER_CONFIG.embedding_dtype,
+            "embedding_dimension": CONTRIEVER_CONFIG.embedding_dimension,
+            "filename": embedding_path.name,
+            "sha256": embedding_sha,
+            "shape": [
+                active_runtime.corpus_manifest.document_count,
+                CONTRIEVER_CONFIG.embedding_dimension,
+            ],
+        },
+        "faiss": {
+            "dimension": CONTRIEVER_CONFIG.embedding_dimension,
+            "filename": index_path.name,
+            "index_type": CONTRIEVER_CONFIG.index_type,
+            "ntotal": active_runtime.corpus_manifest.document_count,
+            "sha256": index_sha,
+        },
+        "environment": {"device": "cpu"},
+    }
+    metadata_path = indexes / f"contriever_cache_{identity.fingerprint_sha256}.json"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    monkeypatch.setattr(runner_module, "EMBEDDINGS_DIR", str(embeddings))
+    monkeypatch.setattr(runner_module, "INDEX_DIR", str(indexes))
+
+    resolved = validate_local_contriever_index_identity(
+        active_runtime, transformers_version=TRANSFORMERS_VERSION
+    )
+    assert resolved.cache_fingerprint_sha256 == identity.fingerprint_sha256
+    assert resolved.index_artifact_sha256 == index_sha
+    assert resolved.retriever_provenance.model_id == "facebook/contriever"
+    assert resolved.retriever_provenance.model_revision == (
+        "2bd46a25019aeea091fd42d1f0fd4801675cf699"
+    )
+
+    index_path.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="physical SHA-256 mismatch"):
+        validate_local_contriever_index_identity(
+            active_runtime, transformers_version=TRANSFORMERS_VERSION
+        )
+
+
 @pytest.mark.parametrize("count", [19, 21])
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_noncanonical_retrieved_pool_fails_without_write(tmp_path, count, dry_run):
@@ -449,12 +688,6 @@ def test_matching_existing_artifact_skips_safely(tmp_path):
         ),
         lambda artifact: replace(artifact, requested_top_n=21),
         lambda artifact: replace(artifact, candidates=artifact.candidates[:-1]),
-        lambda artifact: replace(artifact, producing_git_commit="9" * 40),
-        lambda artifact: replace(artifact, worktree_clean=False),
-        lambda artifact: replace(
-            artifact,
-            environment_fingerprint_sha256="9" * 64,
-        ),
     ],
 )
 def test_conflicting_existing_artifact_is_never_overwritten(tmp_path, mutation):
@@ -464,6 +697,23 @@ def test_conflicting_existing_artifact_is_never_overwritten(tmp_path, mutation):
     before = path.read_bytes()
     with pytest.raises(CandidateArtifactConflictError, match="conflicts with run"):
         run(tmp_path, max_samples=1)
+    assert path.read_bytes() == before
+
+
+def test_existing_scientific_artifact_is_reusable_across_production_provenance(tmp_path):
+    run(tmp_path, max_samples=1)
+    path = tmp_path / "sample_0000.json"
+    existing = read_candidate_artifact(path)
+    changed = replace(
+        existing,
+        producing_git_commit="9" * 40,
+        worktree_clean=False,
+        environment_fingerprint_sha256="9" * 64,
+    )
+    _write_payload(path, changed)
+    before = path.read_bytes()
+    summary = run(tmp_path, max_samples=1)
+    assert summary.skipped_sample_ids == (5,)
     assert path.read_bytes() == before
 
 
@@ -496,6 +746,169 @@ def test_environment_fingerprint_is_deterministic_and_version_sensitive():
     )
 
 
+def test_governed_attempt_one_records_current_executor_fingerprints(
+    monkeypatch, tmp_path
+):
+    fixture = _governed_fixture(tmp_path)
+    monkeypatch.setattr(runner_module, "REPOSITORY_ROOT", tmp_path)
+
+    summary = run_governed_pubmedqa_contriever_candidates(
+        runtime=fixture.runtime,
+        retriever=FakeContriever(),
+        local_index=fixture.local_index,
+        output_dir=fixture.output_dir,
+        transformers_version=TRANSFORMERS_VERSION,
+        environment_fingerprint_sha256=ENV_SHA,
+        runtime_fingerprint_sha256=RUNTIME_SHA,
+        plan=fixture.plan,
+        plan_payload=fixture.plan_payload,
+        planned_record=fixture.planned,
+        registry_path=fixture.registry_path,
+        evidence_authority_path=fixture.authority_path,
+        run_artifact_root=fixture.run_artifact_root,
+        candidate_set_path=fixture.candidate_set_path,
+        hardware_summary="machine-a",
+        timestamp=lambda: "2026-08-24T10:00:02Z",
+    )
+
+    records = read_registry(
+        fixture.registry_path,
+        evidence_authority_path=fixture.authority_path,
+    )
+    running = records[1]
+    assert [record["execution"]["status"] for record in records] == [
+        "PLANNED",
+        "RUNNING",
+        "COMPLETE",
+    ]
+    assert running["execution"]["environment_sha256"] == ENV_SHA
+    assert running["execution"]["runtime_sha256"] == RUNTIME_SHA
+    assert summary.run_id == fixture.planned["run_id"]
+
+
+def test_governed_same_environment_resume_allows_hardware_change_and_binds_output(
+    monkeypatch, tmp_path
+):
+    fixture = _governed_fixture(tmp_path)
+    first_running = _append_first_running_attempt(fixture)
+    monkeypatch.setattr(runner_module, "REPOSITORY_ROOT", tmp_path)
+
+    summary = run_governed_pubmedqa_contriever_candidates(
+        runtime=fixture.runtime,
+        retriever=FakeContriever(),
+        local_index=fixture.local_index,
+        output_dir=fixture.output_dir,
+        transformers_version=TRANSFORMERS_VERSION,
+        environment_fingerprint_sha256=ENV_SHA,
+        runtime_fingerprint_sha256=RUNTIME_SHA,
+        plan=fixture.plan,
+        plan_payload=fixture.plan_payload,
+        planned_record=first_running,
+        registry_path=fixture.registry_path,
+        evidence_authority_path=fixture.authority_path,
+        run_artifact_root=fixture.run_artifact_root,
+        candidate_set_path=fixture.candidate_set_path,
+        hardware_summary="machine-b",
+        resume_reason="infrastructure interruption",
+        timestamp=lambda: "2026-08-24T10:00:02Z",
+    )
+
+    records = read_registry(
+        fixture.registry_path,
+        evidence_authority_path=fixture.authority_path,
+    )
+    resumed_running = records[2]
+    assert [record["execution"]["status"] for record in records] == [
+        "PLANNED",
+        "RUNNING",
+        "RUNNING",
+        "COMPLETE",
+    ]
+    assert {record["run_id"] for record in records} == {fixture.planned["run_id"]}
+    assert resumed_running["execution"]["attempt_count"] == 2
+    assert resumed_running["execution"]["hardware_summary"] == "machine-b"
+    assert resumed_running["execution"]["environment_sha256"] == ENV_SHA
+    assert resumed_running["execution"]["runtime_sha256"] == RUNTIME_SHA
+    artifact = read_candidate_artifact(fixture.output_dir / "sample_0000.json")
+    assert artifact.environment_fingerprint_sha256 == (
+        resumed_running["execution"]["environment_sha256"]
+    )
+    assert artifact.production_fingerprint_sha256 != replace(
+        artifact,
+        environment_fingerprint_sha256="9" * 64,
+    ).production_fingerprint_sha256
+    assert summary.run_id == first_running["run_id"]
+    assert summary.attempt_count == 2
+
+
+@pytest.mark.parametrize(
+    "current_environment,current_runtime,expected_field",
+    [
+        ("8" * 64, RUNTIME_SHA, "environment_sha256"),
+        (ENV_SHA, "9" * 64, "runtime_sha256"),
+    ],
+)
+def test_incompatible_resume_rejected_before_retrieval_and_preserves_candidates(
+    monkeypatch,
+    tmp_path,
+    current_environment,
+    current_runtime,
+    expected_field,
+):
+    fixture = _governed_fixture(tmp_path, preexisting=True)
+    first_running = _append_first_running_attempt(fixture)
+    existing_path = fixture.output_dir / "sample_0000.json"
+    existing_bytes = existing_path.read_bytes()
+    retrieval_calls = []
+
+    def forbidden_retrieval(**kwargs):
+        retrieval_calls.append(kwargs)
+        raise AssertionError("retrieval must not start before resume validation")
+
+    monkeypatch.setattr(
+        runner_module,
+        "run_pubmedqa_contriever_candidates",
+        forbidden_retrieval,
+    )
+    monkeypatch.setattr(runner_module, "REPOSITORY_ROOT", tmp_path)
+
+    with pytest.raises(
+        RunRegistryConflictError,
+        match=rf"identical execution\.{expected_field}",
+    ):
+        run_governed_pubmedqa_contriever_candidates(
+            runtime=fixture.runtime,
+            retriever=object(),
+            local_index=fixture.local_index,
+            output_dir=fixture.output_dir,
+            transformers_version=TRANSFORMERS_VERSION,
+            environment_fingerprint_sha256=current_environment,
+            runtime_fingerprint_sha256=current_runtime,
+            plan=fixture.plan,
+            plan_payload=fixture.plan_payload,
+            planned_record=first_running,
+            registry_path=fixture.registry_path,
+            evidence_authority_path=fixture.authority_path,
+            run_artifact_root=fixture.run_artifact_root,
+            candidate_set_path=fixture.candidate_set_path,
+            hardware_summary="machine-b",
+            resume_reason="infrastructure interruption",
+            timestamp=lambda: "2026-08-24T10:00:02Z",
+        )
+
+    records = read_registry(
+        fixture.registry_path,
+        evidence_authority_path=fixture.authority_path,
+    )
+    assert [record["execution"]["status"] for record in records] == [
+        "PLANNED",
+        "RUNNING",
+    ]
+    assert retrieval_calls == []
+    assert not (fixture.output_dir / "sample_0001.json").exists()
+    assert existing_path.read_bytes() == existing_bytes
+
+
 def test_import_and_help_are_side_effect_free(tmp_path):
     root = Path(__file__).resolve().parents[1]
     watched = (
@@ -526,18 +939,28 @@ def test_import_and_help_are_side_effect_free(tmp_path):
     assert not (tmp_path / "hf").exists()
 
 
-@pytest.mark.parametrize("failed_samples,expected", [(0, 0), (1, 1)])
-def test_main_exit_code_reflects_failures(monkeypatch, capsys, failed_samples, expected):
+def test_main_preflight_does_not_construct_retriever_or_write_registry(
+    monkeypatch, capsys, tmp_path
+):
     import retrievers.contriever_retriever as contriever_module
 
+    registry = tmp_path / "registry.jsonl"
     monkeypatch.setattr(
         runner_module,
         "parse_args",
         lambda: SimpleNamespace(
             cache_dir=None,
             output_dir=Path("unused"),
-            max_samples=1,
-            dry_run=True,
+            max_samples=None,
+            sample_ids=None,
+            dry_run=False,
+            preflight_only=True,
+            registry_path=registry,
+            evidence_authority_path=tmp_path / "authority.json",
+            run_artifact_root=tmp_path / "runs",
+            candidate_set_path=tmp_path / "set.json",
+            resume_run_id=None,
+            resume_reason=None,
         ),
     )
     monkeypatch.setitem(
@@ -556,15 +979,32 @@ def test_main_exit_code_reflects_failures(monkeypatch, capsys, failed_samples, e
         lambda distribution: "fixture-version",
     )
     monkeypatch.setattr(runner_module, "_git_provenance", lambda: (GIT_SHA, True))
+    local_index = SimpleNamespace(cache_fingerprint_sha256="8" * 64)
     monkeypatch.setattr(
-        contriever_module,
-        "ContrieverRetriever",
-        lambda config: SimpleNamespace(device="cpu"),
+        runner_module,
+        "validate_local_contriever_index_identity",
+        lambda *args, **kwargs: local_index,
+    )
+    plan = SimpleNamespace(
+        inspection=SimpleNamespace(valid_entries=(object(), object(), object())),
+        scheduled_sample_ids=(3, 4),
     )
     monkeypatch.setattr(
         runner_module,
-        "run_pubmedqa_contriever_candidates",
-        lambda **kwargs: SimpleNamespace(failed_samples=failed_samples),
+        "prepare_governed_contriever_run",
+        lambda **kwargs: (
+            plan,
+            {"scheduled_sample_ids": [3, 4]},
+            {"run_id": "run-fixture-" + "a" * 24},
+        ),
     )
-    assert runner_module.main() == expected
-    capsys.readouterr()
+    monkeypatch.setattr(
+        contriever_module,
+        "ContrieverRetriever",
+        lambda config: (_ for _ in ()).throw(AssertionError("must not construct")),
+    )
+    assert runner_module.main() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["scheduled_sample_ids"] == [3, 4]
+    assert output["registry_written"] is False
+    assert not registry.exists()
