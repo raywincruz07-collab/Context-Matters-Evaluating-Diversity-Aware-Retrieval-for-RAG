@@ -64,6 +64,17 @@ def _canonical_id(value: str | int) -> str | int:
     return value if isinstance(value, str) else int(value)
 
 
+def canonical_stable_id(value: object, name: str = "stable_id") -> str | int:
+    """Return the canonical scientific representation of a stable artifact ID.
+
+    Exact strings remain strings. Non-boolean integral values, including NumPy
+    integer scalars, become Python ``int`` values. This preserves the existing
+    retrieval-artifact distinction between integer ``1`` and string ``"1"``.
+    """
+    _require_stable_id(value, name)
+    return _canonical_id(value)
+
+
 @dataclass(frozen=True)
 class CandidateEntry:
     """One ordered, unnormalized entry returned by a retriever."""

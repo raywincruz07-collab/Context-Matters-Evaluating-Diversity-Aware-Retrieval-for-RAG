@@ -150,7 +150,7 @@ Status vocabulary:
 | 6 | DPR implementation | **A** | Historical original Facebook dual encoder executed in all 1,000 Sprint-1 rows. Current `src/retrievers/dpr_original_retriever.py` pins the question/context encoders and manifest-bound FAISS identity; 1,000 local PubMedQA top-20 candidate artifacts exist. | Full-corpus HotpotQA/ASQA indexing and candidate production remain. |
 | 7 | Contriever implementation | **A** | Historical `facebook/contriever` execution produced 1,000 Sprint-1 rows. Current frozen config/runtime/provenance and candidate runner exist under `src/retrievers/` and `scripts/`; a validated 3,358-by-768 local index exists. | Current PubMedQA candidate materialization is only 3/1,000; full HotpotQA/ASQA execution remains. |
 | 8 | ColBERTv2 implementation | **A** | Historical RAGatouille ColBERTv2 produced 1,000 Sprint-1 rows. Current canonical direct Stanford ColBERT implementation, immutable checkpoint policy, runtime adapter, candidate runner, environment locks, and tests are tracked. | No local current PubMedQA candidate artifacts exist; RunPod GPU validation and all required index/candidate executions remain. |
-| 9 | Common retriever interface/comparable outputs | **B** | Historical `BaseRetriever`/factory and uniform CSV schema enabled four-way Sprint-1 execution. Current `src/retrieval_artifacts/` defines a stronger common top-20 artifact contract, but only PubMedQA producers exist and current local completion is BM25 1,000, DPR 1,000, Contriever 3, ColBERTv2 0. The legacy general pipeline is not the canonical Sprint-3 runner. | Complete dataset producers and a governed shared run/output registry; quarantine legacy paths from canonical execution. |
+| 9 | Common retriever interface/comparable outputs | **B** | Historical `BaseRetriever`/factory and uniform CSV schema enabled four-way Sprint-1 execution. Current `src/retrieval_artifacts/` defines a stronger common top-20 artifact contract. The governed `src/run_registry.py` supplies shared run/provenance and aggregate candidate-set identity, but it is not integrated into canonical runners. Only PubMedQA producers exist and current local completion is BM25 1,000, DPR 1,000, Contriever 3, ColBERTv2 0. The legacy general pipeline is not the canonical Sprint-3 runner. | Integrate the registry, complete dataset producers and candidate artifacts, and quarantine legacy paths from canonical execution. |
 | 10 | Historical PubMedQA relevance-only top-5 runs | **A** | Four files in `results/sprint1/raw/fullrag_*_top5.csv`; 1,000 unique questions per retriever, 4,000 parsed rows total. | No rerun to rewrite history. Prospective comparison backfills remain separate. |
 | 11 | Historical generator/model actually used | **A** | `results/sprint1/raw/EXPERIMENT_METADATA.json`, every raw row, notebook outputs, and the originating commit agree on Mannheim Maki `ministral-3-14b`. | None for historical identity. Physical provider revision is not recorded and cannot be retroactively invented. |
 | 12 | Historical prompt/decoding actually used | **A** | Exact prompt code is in `config.py`/`generator.py` at `20c94b3`; metadata and notebook bind `temperature=0.0`, `max_tokens=512`, `top_k=5`, and `MAKI_DEFAULT_CTX=7680`. The request contained one user message and no separate system message. | Preserve as historical. New runs must use `GENERATION_PROTOCOL.md`, not this prompt. |
@@ -163,8 +163,8 @@ Status vocabulary:
 | 19 | Existing llama-3.3-70b generations | **C** | No historical result rows with this model were found. | Prospective backfill required. |
 | 20 | Existing gemma4-26b generations | **C** | No historical result rows with this model were found. | Prospective backfill required. |
 | 21 | Existing ministral-3-14b generations | **A** | Exactly 4,000 historical PubMedQA context generations are present, 1,000 per retriever. | Current-protocol PubMedQA `WITH_CONTEXT`, all `WITHOUT_CONTEXT`, and HotpotQA/ASQA cells remain prospective backfill. The historical PubMedQA cells use the historical prompt and 512-token limit and do not satisfy the current controlled three-LLM generation contract. |
-| 22 | Existing run manifests | **B** | Sprint-1 has a small `EXPERIMENT_METADATA.json`; current PubMedQA sample/corpus manifests and the historical HotpotQA sample manifest exist. Sprint-1 metadata omits Git commit, source revision, exact prompt hash, context artifact/hash, attempts, hardware, and raw inventory hash. | Create separate validation/run records for backfills; do not retrofit invented provenance into historical files. |
-| 23 | Existing run/provenance registry | **C** | `EXPERIMENT_STAGE_GATE_PROTOCOL.md` defines the schema, but no materialized run registry was found. `src/evaluation/contracts.py` has row identity only. | Implement and test the registry before any new canonical/backfill execution. |
+| 22 | Existing run manifests | **B** | Sprint-1 has a small `EXPERIMENT_METADATA.json`; current PubMedQA sample/corpus manifests and the historical HotpotQA sample manifest exist. Sprint-1 metadata omits Git commit, source revision, exact prompt hash, context artifact/hash, attempts, hardware, and raw inventory hash. The new registry intentionally contains no fabricated retrospective Sprint-1 records. | Register prospective backfills before execution; do not retrofit invented provenance into historical files. |
+| 23 | Existing run/provenance registry | **A — HARDENED AND VERIFIED** | The implementation passed two adversarial review cycles plus final focused verification before any experiment launched: 46 registry tests and 410 retrieval-artifact/manifest/candidate tests pass. It has a fail-closed evidence-manifest authority, order-independent aggregate candidate-set identity, content-addressed index/selected-context IDs, selected-context lineage, retry-aware append-only snapshots, and strict run-type/sprint validation. `artifacts/run_registry/run_registry_v1.jsonl` remains header-only with zero experiment records; no historical evidence changed and no scientific result was compromised. | Integrate mandatory pre-run registration into each future canonical/backfill runner before prospective execution. |
 | 24 | Existing Sprint-1 notebook(s) | **B** | `notebooks/Sprint1_Baseline_RAG_Evaluation.ipynb` exists: 33 cells (27 code, 6 markdown), 20 code cells with saved outputs, including smoke and full runs. It is an executed historical Colab/reproduction notebook, not the required principal `01_sprint1_analysis.ipynb`; it embeds setup/workflow code and lacks the complete prospective-backfill story. | Preserve it. Build the new principal notebook later from immutable artifacts, with reusable logic in `src/`. |
 | 25 | Historical results immutable/preserved separately | **A** | Sprint-1 raw and derived files are tracked under `results/sprint1/`; verified raw/summary hashes match their `20c94b3` versions exactly. Sprint-2 artifacts are separately under `results/sprint2/`. Frozen protocols prohibit relabelling or overwriting. | Enforce distinct run IDs/directories and `PROSPECTIVE_BACKFILL` labels for all new work. |
 
@@ -385,6 +385,15 @@ implementations are required before canonical evaluation.
   `results/sprint2/`.
 - Frozen PubMedQA sample manifest (1,000) and corpus manifest (3,358).
 - Frozen historical HotpotQA sample manifest (500).
+- Hardened and independently verified run/provenance registry at
+  `src/run_registry.py`, with schema `sprint3.run-registry-record.v1`, 46
+  focused passing tests after two adversarial review cycles plus final focused
+  verification, 410 passing retrieval-artifact/manifest/candidate tests, a
+  one-binding prospective evidence authority at
+  `artifacts/run_registry/evidence_manifest_authority_v1.json`, and a
+  header-only registry containing zero experiment records at
+  `artifacts/run_registry/run_registry_v1.jsonl`. No historical run record was
+  fabricated and no experiment has used the registry yet.
 - Local ignored Sprint-3 PubMedQA candidate artifacts: BM25 1,000; DPR 1,000;
   Contriever 3; ColBERTv2 0.
 - Local ignored manifest-bound DPR and Contriever PubMedQA embedding/FAISS
@@ -393,7 +402,8 @@ implementations are required before canonical evaluation.
 
 ## Missing work
 
-- run registry, configuration bundles, output schemas, and inventory hashes;
+- run-registry integration into canonical runners before prospective execution;
+- dataset/run configuration bundles and generation/evaluator output schemas;
 - full current PubMedQA Contriever/ColBERT candidate materialization;
 - HotpotQA and ASQA source acquisition, manifests, full corpora, indexes, and
   candidate producers;
@@ -506,26 +516,37 @@ backfills in separate, explicitly labelled run directories.
 
 - Mode: EXECUTION STARTED
 - Current sprint: SPRINT 1 COMPLETION
-- Last completed: Historical Sprint-1 artifact validator
-- Current task: Sprint-1 run registry/provenance implementation
+- Last completed: Governed run-registry/provenance implementation, hardening,
+  and independent verification
+- Current task: PubMedQA candidate-artifact audit
 - SELECTION: BLOCKED pending professor numeric-rule adjudication
 - Protected-final execution: NOT STARTED
-- Next action: implement and test the Sprint-1 run registry/provenance layer
+- Experiments launched: none; the production registry contains zero experiment
+  records, historical Sprint-1/Sprint-2 evidence remains unchanged, and no
+  scientific result is compromised
+- Pre-execution dependency: integrate mandatory run registration into every
+  canonical runner before prospective execution
+- Next action: perform a read-only audit of the existing current-protocol
+  PubMedQA Top-20 candidate artifacts for BM25, DPR, Contriever, and ColBERTv2
+  to determine exactly what is valid/reusable and what is missing before any
+  new candidate generation
 - Branch: `sprint3`
-- HEAD: `ba10425ff331c214cdb0da6c274213d1a2a06d0d`
-- Audit-start working tree: clean
-- Current task changes: `docs/PROJECT_STATE.md`, the historical validator and
-  focused tests, and its separate audit inventory; historical inputs unchanged
+- Checkpoint parent HEAD: `32a2ecc5cebec189086287040c96fb80f10389e7`
+- Registry implementation audit-start working tree: clean
+- Checkpoint files: `src/run_registry.py`,
+  `src/retrieval_artifacts/contracts.py`,
+  `artifacts/run_registry/run_registry_v1.jsonl`,
+  `artifacts/run_registry/evidence_manifest_authority_v1.json`, focused
+  registry tests, and this continuity update; historical inputs unchanged
 
 ## Exact next action
 
-Implement and test the smallest Sprint-1 run registry/provenance layer required
-to register prospective current-protocol backfills separately from historical
-evidence. It must follow `EXPERIMENT_STAGE_GATE_PROTOCOL.md`, bind dataset,
-sample, corpus, candidate, prompt/decoding, model/runtime, context mode, status,
-output inventory, Git/environment, and artifact hashes, and preserve the frozen
-retrieval-independent identity of `WITHOUT_CONTEXT`. Do not run any backfill,
-retrieval, generation, or evaluation as part of that action.
+Perform a READ-ONLY audit of the existing current-protocol PubMedQA Top-20
+candidate artifacts for BM25, DPR, Contriever, and ColBERTv2. Determine exactly
+what is valid/reusable and what is missing before any new candidate generation.
+Every prospective execution must be registered before it starts; canonical
+runner integration remains a separate pre-execution dependency. The candidate
+audit itself is read-only and does not require launching a new experiment.
 
 ## Known contradictions and superseded statements
 
