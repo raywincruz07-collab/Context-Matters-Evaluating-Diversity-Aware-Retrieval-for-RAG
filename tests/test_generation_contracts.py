@@ -19,6 +19,7 @@ from generation.artifacts import (
     read_generation_artifact,
     write_generation_artifact,
 )
+from generation.cli_support import load_model_bindings, runtime_provenance
 from generation.maki import (
     CanonicalMakiAdapter,
     MakiConfig,
@@ -363,6 +364,53 @@ def test_maki_requires_physical_id_and_has_no_qwen_default():
     assert "qwen" not in _maki_config().physical_model_id.lower()
 
 
+@pytest.mark.parametrize("seed", [True, False, 1.0, "20260823"])
+def test_maki_seed_must_be_a_non_boolean_integer_or_null(seed):
+    with pytest.raises(TypeError, match="integer or null"):
+        _maki_config(seed=seed)
+
+
+def test_maki_seed_is_separate_from_direct_mode_and_runtime_provenance():
+    prompt = render_pubmedqa_prompt(question="Q?")
+    seeded = CanonicalMakiAdapter(
+        _maki_config(seed=20260823), transport=lambda **_: {}
+    )
+    seeded_payload = seeded.request_payload(prompt)
+    assert seeded_payload["seed"] == 20260823
+    assert list(seeded_payload).count("seed") == 1
+    assert seeded.config.runtime_identity()["seed"] == 20260823
+    assert runtime_provenance(seeded)["runtime_identity"]["seed"] == 20260823
+
+    unseeded = CanonicalMakiAdapter(_maki_config(seed=None), transport=lambda **_: {})
+    assert "seed" not in unseeded.request_payload(prompt)
+    assert unseeded.config.runtime_identity()["seed"] is None
+
+    with pytest.raises(ValueError, match="cannot override frozen keys"):
+        _maki_config(seed=20260823, direct_mode_control={"seed": 7})
+
+
+def test_v3_bindings_keep_ministral_direct_mode_unsupported_and_seeded():
+    bindings = load_model_bindings(
+        Path(__file__).resolve().parents[1]
+        / "configs/sprint3/maki_model_bindings_v3.json"
+    )
+    assert {config.seed for config in bindings.values()} == {20260823}
+    for logical_id in ("llama-3.3-70b", "gemma4-26b"):
+        config = bindings[logical_id]
+        assert config.direct_mode_status == "SUPPORTED_AND_ENABLED"
+        assert dict(config.direct_mode_control) == {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+    ministral = bindings["ministral-3-14b"]
+    assert ministral.direct_mode_status == "NOT_SUPPORTED_BY_PROVIDER"
+    assert dict(ministral.direct_mode_control) == {}
+    payload = CanonicalMakiAdapter(
+        ministral, transport=lambda **_: {}
+    ).request_payload(render_pubmedqa_prompt(question="Q?"))
+    assert payload["seed"] == 20260823
+    assert "chat_template_kwargs" not in payload
+
+
 def test_maki_exact_payload_and_content_is_never_retried(monkeypatch):
     monkeypatch.setenv("MAKI_API_KEY", "super-secret-value")
     calls = []
@@ -391,6 +439,7 @@ def test_maki_exact_payload_and_content_is_never_retried(monkeypatch):
     assert calls[0]["payload"]["max_tokens"] == 256
     assert calls[0]["payload"]["n"] == 1
     assert calls[0]["payload"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "seed" not in calls[0]["payload"]
     assert "super-secret-value" not in json.dumps(result.provider_metadata)
 
 

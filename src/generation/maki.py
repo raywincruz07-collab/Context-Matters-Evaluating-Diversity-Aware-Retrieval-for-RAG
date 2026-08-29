@@ -20,7 +20,7 @@ PRIMARY_LLM_LOGICAL_IDS = (
     "ministral-3-14b",
 )
 _FROZEN_REQUEST_KEYS = frozenset(
-    {"model", "messages", "temperature", "max_tokens", "n", "stream"}
+    {"model", "messages", "temperature", "max_tokens", "n", "stream", "seed"}
 )
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+"),
@@ -101,6 +101,7 @@ class MakiConfig:
     model_revision_kind: str
     direct_mode_status: str
     direct_mode_control: Mapping[str, Any]
+    seed: int | None = None
     timeout_seconds: float = 300.0
 
     def __post_init__(self) -> None:
@@ -133,6 +134,10 @@ class MakiConfig:
         if self.direct_mode_status == "NOT_SUPPORTED_BY_PROVIDER" and self.direct_mode_control:
             raise ValueError("unsupported direct mode must use an empty control object")
         stable_json_sha256(dict(self.direct_mode_control))
+        if self.seed is not None and (
+            isinstance(self.seed, bool) or not isinstance(self.seed, int)
+        ):
+            raise TypeError("seed must be an integer or null")
         if isinstance(self.timeout_seconds, bool) or self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -150,6 +155,7 @@ class MakiConfig:
             "model_revision_kind": self.model_revision_kind,
             "direct_mode_status": self.direct_mode_status,
             "direct_mode_control": dict(self.direct_mode_control),
+            "seed": self.seed,
             "timeout_seconds": self.timeout_seconds,
         }
 
@@ -242,6 +248,8 @@ class CanonicalMakiAdapter:
             "n": 1,
             "stream": False,
         }
+        if self.config.seed is not None:
+            payload["seed"] = self.config.seed
         payload.update(dict(self.config.direct_mode_control))
         return payload
 

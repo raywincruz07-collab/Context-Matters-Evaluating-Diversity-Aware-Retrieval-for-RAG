@@ -136,6 +136,7 @@ def load_model_bindings(path: Path) -> dict[str, MakiConfig]:
             model_revision_kind=value["model_revision_kind"],
             direct_mode_status=value["direct_mode_status"],
             direct_mode_control=value["direct_mode_control"],
+            seed=value.get("seed"),
             timeout_seconds=value.get("timeout_seconds", 300.0),
         )
     return result
