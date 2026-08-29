@@ -1,6 +1,6 @@
 # Context Matters RAG — Project State and Continuation Record
 
-Last updated: 2026-08-24. This file is the permanent handoff record for
+Last updated: 2026-08-29. This file is the permanent handoff record for
 future project sessions. Update it when a governed checkpoint changes; do not
 rewrite historical evidence.
 
@@ -148,9 +148,9 @@ Status vocabulary:
 | 4 | ASQA baseline corpus preparation suitable for prospective Sprint-1 backfill | **C** | No ASQA data, sample/corpus manifest, or index is present. Later authority requires the full DPR-2018 corpus, expected 21,015,324 passages, with no canonical fallback. | Acquire and validate ASQA plus the full DPR-2018 corpus; materialize the frozen 3,482/871 partition and corpus manifest before use. |
 | 5 | BM25 implementation | **A** | Historical `retrievers/bm25_retriever.py` at `20c94b3` executed in Sprint 1. Current `src/retrievers/bm25_retriever.py` is a hardened corpus-bound implementation; `scripts/run_pubmedqa_bm25_candidates.py` and 1,000 local top-20 candidate artifacts exist. | Dataset-specific full-corpus execution remains; no missing historical implementation. |
 | 6 | DPR implementation | **A** | Historical original Facebook dual encoder executed in all 1,000 Sprint-1 rows. Current `src/retrievers/dpr_original_retriever.py` pins the question/context encoders and manifest-bound FAISS identity; 1,000 local PubMedQA top-20 candidate artifacts exist. | Full-corpus HotpotQA/ASQA indexing and candidate production remain. |
-| 7 | Contriever implementation | **A** | Historical `facebook/contriever` execution produced 1,000 Sprint-1 rows. Current frozen config/runtime/provenance and candidate runner exist under `src/retrievers/` and `scripts/`; a validated 3,358-by-768 local index exists. | Current PubMedQA candidate materialization is only 3/1,000; full HotpotQA/ASQA execution remains. |
-| 8 | ColBERTv2 implementation | **A** | Historical RAGatouille ColBERTv2 produced 1,000 Sprint-1 rows. Current canonical direct Stanford ColBERT implementation, immutable checkpoint policy, runtime adapter, candidate runner, environment locks, and tests are tracked. | No local current PubMedQA candidate artifacts exist; RunPod GPU validation and all required index/candidate executions remain. |
-| 9 | Common retriever interface/comparable outputs | **B** | Historical `BaseRetriever`/factory and uniform CSV schema enabled four-way Sprint-1 execution. Current `src/retrieval_artifacts/` defines a stronger common top-20 artifact contract. The PubMedQA Contriever producer now has governed exact missing-ID planning, registry lifecycle hooks, resume-safe artifact preservation, output inventory, and complete-set finalization. Only PubMedQA producers exist and current local completion remains BM25 1,000, DPR 1,000, Contriever 3, ColBERTv2 0. The legacy general pipeline is not the canonical Sprint-3 runner. | Integrate the same governed layer into remaining canonical runners, complete candidate artifacts, and quarantine legacy paths from canonical execution. |
+| 7 | Contriever implementation | **A** | Historical `facebook/contriever` execution produced 1,000 Sprint-1 rows. Current frozen config/runtime/provenance and candidate runner exist under `src/retrievers/` and `scripts/`; a validated 3,358-by-768 index and 1,000/1,000 current PubMedQA top-20 candidate artifacts are complete on RunPod. | Full HotpotQA/ASQA execution remains. |
+| 8 | ColBERTv2 implementation | **A** | Historical RAGatouille ColBERTv2 produced 1,000 Sprint-1 rows. Current canonical direct Stanford ColBERT implementation, immutable checkpoint policy, runtime adapter, candidate runner, environment locks, and tests are tracked; its current PubMedQA index and 1,000/1,000 top-20 candidate artifacts are complete on RunPod. | Full HotpotQA/ASQA execution remains. |
+| 9 | Common retriever interface/comparable outputs | **A — PUBMEDQA COMPLETE** | Historical `BaseRetriever`/factory and uniform CSV schema enabled four-way Sprint-1 execution. Current `src/retrieval_artifacts/` defines a stronger common top-20 artifact contract. Current RunPod PubMedQA completion is BM25 1,000, DPR 1,000, Contriever 1,000, and ColBERTv2 1,000. The legacy general pipeline is not the canonical Sprint-3 runner. | Integrate the governed layer into future HotpotQA/ASQA canonical runners and quarantine legacy paths from canonical execution. |
 | 10 | Historical PubMedQA relevance-only top-5 runs | **A** | Four files in `results/sprint1/raw/fullrag_*_top5.csv`; 1,000 unique questions per retriever, 4,000 parsed rows total. | No rerun to rewrite history. Prospective comparison backfills remain separate. |
 | 11 | Historical generator/model actually used | **A** | `results/sprint1/raw/EXPERIMENT_METADATA.json`, every raw row, notebook outputs, and the originating commit agree on Mannheim Maki `ministral-3-14b`. | None for historical identity. Physical provider revision is not recorded and cannot be retroactively invented. |
 | 12 | Historical prompt/decoding actually used | **A** | Exact prompt code is in `config.py`/`generator.py` at `20c94b3`; metadata and notebook bind `temperature=0.0`, `max_tokens=512`, `top_k=5`, and `MAKI_DEFAULT_CTX=7680`. The request contained one user message and no separate system message. | Preserve as historical. New runs must use `GENERATION_PROTOCOL.md`, not this prompt. |
@@ -165,7 +165,7 @@ Status vocabulary:
 | 21 | Existing ministral-3-14b generations | **A** | Exactly 4,000 historical PubMedQA context generations are present, 1,000 per retriever. | Current-protocol PubMedQA `WITH_CONTEXT`, all `WITHOUT_CONTEXT`, and HotpotQA/ASQA cells remain prospective backfill. The historical PubMedQA cells use the historical prompt and 512-token limit and do not satisfy the current controlled three-LLM generation contract. |
 | 22 | Existing run manifests | **B** | Sprint-1 has a small `EXPERIMENT_METADATA.json`; current PubMedQA sample/corpus manifests and the historical HotpotQA sample manifest exist. Sprint-1 metadata omits Git commit, source revision, exact prompt hash, context artifact/hash, attempts, hardware, and raw inventory hash. The new registry intentionally contains no fabricated retrospective Sprint-1 records. | Register prospective backfills before execution; do not retrofit invented provenance into historical files. |
 | 23 | Existing run/provenance registry | **A — HARDENED AND VERIFIED** | The implementation passed two adversarial review cycles plus final focused verification before any experiment launched: 46 registry tests and 410 retrieval-artifact/manifest/candidate tests pass. It has a fail-closed evidence-manifest authority, order-independent aggregate candidate-set identity, content-addressed index/selected-context IDs, selected-context lineage, retry-aware append-only snapshots, and strict run-type/sprint validation. `artifacts/run_registry/run_registry_v1.jsonl` remains header-only with zero experiment records; no historical evidence changed and no scientific result was compromised. | Integrate mandatory pre-run registration into each future canonical/backfill runner before prospective execution. |
-| 24 | Existing Sprint-1 notebook(s) | **B** | `notebooks/Sprint1_Baseline_RAG_Evaluation.ipynb` exists: 33 cells (27 code, 6 markdown), 20 code cells with saved outputs, including smoke and full runs. It is an executed historical Colab/reproduction notebook, not the required principal `01_sprint1_analysis.ipynb`; it embeds setup/workflow code and lacks the complete prospective-backfill story. | Preserve it. Build the new principal notebook later from immutable artifacts, with reusable logic in `src/`. |
+| 24 | Existing Sprint-1 notebook(s) | **B** | `notebooks/Sprint1_Baseline_RAG_Evaluation.ipynb` remains the executed historical Colab/reproduction notebook. The new professor-facing `notebooks/sprint1/01_pubmedqa_baseline.ipynb` is being built to run top-to-bottom from the repository using saved artifacts. | Preserve the historical notebook; complete and validate the new dataset-specific notebook without embedding scientific outputs manually. |
 | 25 | Historical results immutable/preserved separately | **A** | Sprint-1 raw and derived files are tracked under `results/sprint1/`; verified raw/summary hashes match their `20c94b3` versions exactly. Sprint-2 artifacts are separately under `results/sprint2/`. Frozen protocols prohibit relabelling or overwriting. | Enforce distinct run IDs/directories and `PROSPECTIVE_BACKFILL` labels for all new work. |
 
 No audit item is classified **D**: every requested existence/configuration claim
@@ -303,6 +303,27 @@ Canonical generation uses the exact system/user templates in
 `OK`, `REFUSAL`, `PARSE_FAILURE`, `TRUNCATED`, and `ERROR`; only infrastructure
 errors may retry, with three total attempts maximum.
 
+### Generation repeatability prompt selection — PRE-EXECUTION
+
+- Repeatability prompt source: HotpotQA BEIR train, with evidence role
+  `DEVELOPMENT`.
+- Pinned query source: `BeIR/hotpotqa`, config `queries`, revision
+  `a7e8bab212f5a89f9be1bc9b654aa6dfa317f32b`.
+- Pinned qrels source: `BeIR/hotpotqa-qrels`, split `train`, revision
+  `b15429e9244c8ec966985d7778427c3b1543b314`.
+- Validate exactly 85,000 unique `DEVELOPMENT` query IDs.
+- Order IDs ascending by
+  `SHA256("generation-repeatability-v1|" + query_id)`, using `query_id` as the
+  deterministic tie-break, and select exactly the first 20 IDs.
+- Join the exact query text and use canonical `WITHOUT_CONTEXT` prompt
+  rendering.
+- This selection was frozen before any repeatability/model calls and uses no
+  answers, retrieval scores, model outputs, or question-difficulty signal.
+- The gate remains 20 prompts × 3 calls × 3 LLMs = 180 calls, with `>=19/20`
+  identical stripped-response triples required per model.
+- The materializer and focused tests are implemented. The real manifest has
+  not been materialized and no repeatability/model call has been made.
+
 ## Diversification methods
 
 - relevance-only baseline: first five of the shared top-20;
@@ -394,10 +415,29 @@ implementations are required before canonical evaluation.
   header-only registry containing zero experiment records at
   `artifacts/run_registry/run_registry_v1.jsonl`. No historical run record was
   fabricated and no experiment has used the registry yet.
-- Local ignored Sprint-3 PubMedQA candidate artifacts: BM25 1,000; DPR 1,000;
-  Contriever 3; ColBERTv2 0.
-- Local ignored manifest-bound DPR and Contriever PubMedQA embedding/FAISS
-  caches, each 3,358 × 768.
+- Current RunPod PubMedQA top-20 candidate sets are complete: BM25 1,000/1,000,
+  DPR 1,000/1,000, Contriever 1,000/1,000, and ColBERTv2 1,000/1,000.
+- Current RunPod PubMedQA relevance selected-context sets are complete for all
+  four retrievers: 1,000/1,000 ordered top-5 contexts each, all validated
+  against the frozen PubMedQA sample manifest with `candidate_pool=20`,
+  `top_k=5`, and `method=none`.
+- Current controlled-replication PubMedQA retrieval analysis is complete with
+  4,000 per-query rows and per-query Recall@5, MRR@5, and Candidate Recall@20.
+  Current descriptive Recall@5 means are:
+
+  | Retriever | Current controlled-replication Recall@5 |
+  |---|---:|
+  | Contriever | 0.740371 |
+  | ColBERTv2 | 0.738210 |
+  | BM25 | 0.599211 |
+  | DPR | 0.325259 |
+
+  These current controlled-replication values are separate from and do not
+  replace the historical Sprint-1 retrieval values recorded above.
+- The generation repeatability prompt-manifest materializer and focused tests
+  are implemented, and the exact deterministic 20-prompt selection rule is
+  documented. The real prompt manifest has not been materialized and the
+  180-call repeatability gate has not been executed.
 - Frozen Sprint-3 scientific protocols and amendments through current HEAD.
 
 ## Missing work
@@ -410,15 +450,14 @@ implementations are required before canonical evaluation.
   canonical PubMedQA prompt, selected-context, generation-row, Maki adapter,
   repeatability-gate, missing-only runner, and governed block interfaces are
   now implemented but have made no model calls;
-- local co-location and exact identity validation of the already-completed
-  RunPod PubMedQA Contriever and ColBERTv2 candidate sets and ColBERT index;
 - HotpotQA and ASQA source acquisition, manifests, full corpora, indexes, and
   candidate producers;
 - HotpotQA full-corpus resource pilot and full-build validation;
 - canonical diversification artifact production;
-- physical Maki model identities, local co-location/validation of all four
-  candidate sets, materialization of relevance-only selected contexts, and
-  execution of the frozen generator repeatability gate;
+- materialization/freezing of the real 20-prompt `DEVELOPMENT` repeatability
+  manifest, provenance binding of the three physical Maki model identities,
+  secure `MAKI_API_KEY` configuration, and execution/passage of the frozen
+  repeatability gate before any 1,000-row generation block;
 - decomposer bake-off, immutable winner snapshot, and claim artifacts;
 - NLI snapshot, human annotation, threshold fitting/validation, and evaluator
   bundle;
@@ -430,7 +469,9 @@ implementations are required before canonical evaluation.
 - materialized development/selection/protected manifests at their governed
   stages;
 - prospective comparable baseline backfills in the gap matrix;
-- the four principal notebooks and final report/presentation.
+- the dataset-specific sprint notebooks, final cross-sprint notebook, and final
+  report/presentation; `notebooks/sprint1/01_pubmedqa_baseline.ipynb` is
+  currently being built.
 
 ## External blockers
 
@@ -467,18 +508,37 @@ implementations are required before canonical evaluation.
   prompt, parser, threshold, or metric semantics.
 - Never commit credentials, private data, or floating unverified model state.
 
-## Four-notebook plan
+## Notebook organization
 
-Exactly four principal research notebooks will be produced:
+Use separate dataset notebooks inside each sprint directory, followed by one
+sprint summary notebook:
 
-1. `notebooks/01_sprint1_analysis.ipynb`
-2. `notebooks/02_sprint2_analysis.ipynb`
-3. `notebooks/03_sprint3_analysis.ipynb`
-4. `notebooks/04_final_research_analysis.ipynb`
+```text
+notebooks/sprint1/
+  01_pubmedqa_baseline.ipynb
+  02_hotpotqa_baseline.ipynb
+  03_asqa_baseline.ipynb
+  04_sprint1_summary.ipynb
+notebooks/sprint2/
+  01_pubmedqa_diversification.ipynb
+  02_hotpotqa_diversification.ipynb
+  03_asqa_diversification.ipynb
+  04_sprint2_summary.ipynb
+notebooks/sprint3/
+  01_pubmedqa_final.ipynb
+  02_hotpotqa_final.ipynb
+  03_asqa_final.ipynb
+  04_sprint3_summary.ipynb
+notebooks/final/
+  01_cross_sprint_analysis.ipynb
+```
 
-Each sprint notebook must cover objective/RQ, datasets/configuration, workflow,
-small real demonstrations, provenance, validation/loading of complete saved
-artifacts, metrics, tables, figures, interpretation, and conclusions. Core
+The active notebook build is the professor-facing
+`notebooks/sprint1/01_pubmedqa_baseline.ipynb`. It is intended to run
+top-to-bottom from the repository using saved artifacts. Each dataset and
+summary notebook must cover the applicable objective/RQ, dataset/configuration,
+workflow, provenance, validation/loading of complete saved artifacts, metrics,
+tables, figures, plain-English interpretation, and conclusions. Core
 implementations remain in `src/`; notebooks consume frozen artifacts and do
 not contain manually typed result numbers.
 
@@ -508,68 +568,72 @@ backfills in separate, explicitly labelled run directories.
 ## Execution plan
 
 1. **Sprint 1:** verify historical evidence; implement only missing comparable
-   baseline backfills under current contracts; create/validate
-   `01_sprint1_analysis.ipynb`; freeze Sprint 1.
+   baseline backfills under current contracts; complete/validate the four
+   `notebooks/sprint1/` dataset/summary notebooks; freeze Sprint 1.
 2. **Sprint 2:** verify historical diversification evidence; backfill only
-   missing comparable conditions; create/validate `02_sprint2_analysis.ipynb`;
-   freeze Sprint 2.
+   missing comparable conditions; complete/validate the four
+   `notebooks/sprint2/` dataset/summary notebooks; freeze Sprint 2.
 3. **Sprint 3:** close Stage-1/2 implementation, calibration, provenance, and
    professor-dependent gates; bounded selection; lock winners; execute frozen
-   final/protected matrix; predefined Phase-5 analyses; create/validate
-   `03_sprint3_analysis.ipynb`; freeze Sprint 3.
-4. **Final:** create `04_final_research_analysis.ipynb`; prepare only
-   evidence-supported report and presentation conclusions.
+   final/protected matrix; predefined Phase-5 analyses; complete/validate the
+   four `notebooks/sprint3/` dataset/summary notebooks; freeze Sprint 3.
+4. **Final:** create `notebooks/final/01_cross_sprint_analysis.ipynb`; prepare
+   only evidence-supported report and presentation conclusions.
 
 ## Current checkpoint
 
 - Mode: EXECUTION STARTED
 - Current sprint: SPRINT 1 COMPLETION
-- Last completed: canonical governed PubMedQA generation subsystem
-  implemented without retrieval or model/API execution
-- Current task: generation pre-execution closure: physical Maki model-ID
-  resolution, candidate co-location/validation, and repeatability execution
-- Current candidate status:
-  - BM25: 1,000/1,000 reusable
-  - DPR: 1,000/1,000 reusable
-  - Contriever: 3/1,000 currently co-located in WSL; independently validated
-    RunPod set is 1,000/1,000 and must be co-located/identity-validated, not rerun
-  - ColBERTv2: 0/1,000 currently co-located in WSL; RunPod contains 1,000
-    candidates and the completed canonical index, which must be
-    co-located/identity-validated, not rerun
-- Production registry: 0 experiment records
-- Generation-infrastructure verification: 21 focused generation tests, 48
-  existing registry tests, 320 relevant retrieval-artifact/manifest/candidate
-  tests, and 1,308 full-repository tests passed
+- Last completed: current PubMedQA relevance-only selected contexts and
+  controlled-replication retrieval analysis, separate from historical Sprint 1
+- Current task: build the professor-facing
+  `notebooks/sprint1/01_pubmedqa_baseline.ipynb` from saved artifacts while
+  closing generation pre-execution blockers
+- Current RunPod PubMedQA candidate status:
+  - BM25: 1,000/1,000
+  - DPR: 1,000/1,000
+  - Contriever: 1,000/1,000
+  - ColBERTv2: 1,000/1,000
+- Current RunPod PubMedQA selected-context status:
+  - BM25: 1,000/1,000 relevance-only top-5 contexts
+  - DPR: 1,000/1,000 relevance-only top-5 contexts
+  - Contriever: 1,000/1,000 relevance-only top-5 contexts
+  - ColBERTv2: 1,000/1,000 relevance-only top-5 contexts
+  - shared contract: `candidate_pool=20`, `top_k=5`, `method=none`
+  - validation: all sets match the frozen PubMedQA sample manifest
+- Current PubMedQA retrieval analysis: complete, 4,000 per-query rows with
+  Recall@5, MRR@5, and Candidate Recall@20. Current descriptive Recall@5 means
+  are Contriever 0.740371, ColBERTv2 0.738210, BM25 0.599211, and DPR 0.325259;
+  these are not the historical Sprint-1 retrieval values.
+- Generation infrastructure and repeatability-manifest focused tests pass; the
+  deterministic 20-prompt selection rule is implemented and documented.
 - SELECTION: BLOCKED pending professor numeric-rule adjudication
 - Protected-final execution: NOT STARTED
-- Experiments launched: none; the production registry contains zero experiment
-  records, historical Sprint-1/Sprint-2 evidence remains unchanged, and no
-  scientific result is compromised
-- Canonical generation status: subsystem implemented; zero model/API calls;
-  repeatability gate pending; all 15 governed blocks and 15,000 canonical rows
-  remain pending
-- Pre-execution dependency: resolve and provenance-bind the three physical
-  Maki model IDs; co-locate and validate all four candidate sets and required
-  neural index identities; materialize the 4,000 missing-only selected-context
-  artifacts; freeze the exact 20-prompt DEVELOPMENT repeatability manifest;
-  pass the 180-call gate before opening any 1,000-row generation block
-- Next action: perform the physical-model and candidate/context preflight;
-  do not register or execute a generation block until every prerequisite and
-  the matching repeatability gate pass
+- Canonical generation status: zero generation artifacts and zero Maki/model
+  calls. The real repeatability prompt manifest is not yet materialized, the
+  180-call repeatability gate is not yet executed, and all 15 governed blocks
+  and 15,000 canonical rows remain pending.
+- Immediate blockers: materialize and freeze the real 20-prompt `DEVELOPMENT`
+  manifest; resolve and provenance-bind the three physical Maki model
+  identities; configure `MAKI_API_KEY` securely; pass the repeatability gate
+  before any 1,000-row generation block.
+- Historical Sprint-1/Sprint-2 evidence remains unchanged and separate from
+  the current controlled replication.
 - Branch: `sprint3`
 - Implementation base HEAD: `ac18535d19ab49a5b2a9a345e9602c6d5631c089`
 - Registry implementation audit-start working tree: clean
-- Current implementation files: `src/generation/`, the three governed
-  PubMedQA generation/context/repeatability CLIs, two focused generation test
-  modules, and this continuity update; historical inputs unchanged
+- Current implementation/work products: `src/generation/`, governed PubMedQA
+  generation/context/repeatability CLIs, the repeatability prompt materializer
+  and focused tests, current retrieval-analysis artifacts, and the in-progress
+  `notebooks/sprint1/01_pubmedqa_baseline.ipynb`; historical inputs unchanged
 
 ## Exact next action
 
-Resolve the three physical Maki model identities and co-locate/validate the
-four current PubMedQA candidate sets and neural index identities. Then
-materialize exact relevance-only selected contexts and freeze/execute the
-20-prompt repeatability gate. Do not register or execute any 1,000-row
-generation block before those prerequisites pass.
+Materialize and freeze the real deterministic 20-prompt `DEVELOPMENT`
+repeatability manifest. Then resolve and provenance-bind the three physical
+Maki model identities, configure `MAKI_API_KEY` securely, and execute the
+180-call repeatability gate. Do not register or execute any 1,000-row
+generation block before the gate passes.
 
 ## Known contradictions and superseded statements
 
