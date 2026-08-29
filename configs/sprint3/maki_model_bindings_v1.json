@@ -1,0 +1,43 @@
+{
+  "models": {
+    "llama-3.3-70b": {
+      "base_url": "https://maki.uni-mannheim.de/v1",
+      "physical_model_id": "llama-3.3-70b",
+      "model_revision": null,
+      "model_revision_kind": "NOT_PROVIDED_BY_PROVIDER",
+      "direct_mode_status": "SUPPORTED_AND_ENABLED",
+      "direct_mode_control": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "timeout_seconds": 300
+    },
+    "gemma4-26b": {
+      "base_url": "https://maki.uni-mannheim.de/v1",
+      "physical_model_id": "gemma4-26b",
+      "model_revision": null,
+      "model_revision_kind": "NOT_PROVIDED_BY_PROVIDER",
+      "direct_mode_status": "SUPPORTED_AND_ENABLED",
+      "direct_mode_control": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "timeout_seconds": 300
+    },
+    "ministral-3-14b": {
+      "base_url": "https://maki.uni-mannheim.de/v1",
+      "physical_model_id": "ministral-3-14b",
+      "model_revision": null,
+      "model_revision_kind": "NOT_PROVIDED_BY_PROVIDER",
+      "direct_mode_status": "SUPPORTED_AND_ENABLED",
+      "direct_mode_control": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "timeout_seconds": 300
+    }
+  }
+}
