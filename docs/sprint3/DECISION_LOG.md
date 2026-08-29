@@ -1,5 +1,22 @@
 # Sprint 3 Decision Log
 
+## 2026-08-29 — Prospective reserve-LLM substitution
+
+- **Decision:** Replace `ministral-3-14b` with the already-frozen reserve
+  `qwen3.5-122b` for canonical Stage-3 generation while preserving exactly
+  three generator slots.
+- **Reason:** After the provider-unsupported Ministral chat-template control
+  was removed and fixed provider seed `20260823` was introduced prospectively,
+  the frozen seeded gate still gave Ministral 7/20 and failed overall. This is
+  an unresolved repeatability trigger, not an answer-quality decision.
+- **Conditions:** Before canonical use, record Qwen's exact runtime/model
+  provenance, establish provider-supported direct/non-thinking behavior on
+  `DEVELOPMENT`, check seed support, rerun affected development gates, and pass
+  the complete final three-model gate. Existing v1/v2 gate artifacts remain
+  immutable; `SELECTION` and protected-final outcomes remain unopened.
+- **Authority:**
+  `docs/sprint3/EXPERIMENT_STAGE_GATE_PROTOCOL_AMENDMENT_02.md`.
+
 ## 2026-08-18 — Canonical ColBERTv2 production backend
 
 - **Decision:** Use direct Stanford ColBERT from `colbert-ai==0.2.22` with
