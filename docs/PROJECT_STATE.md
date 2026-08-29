@@ -303,7 +303,7 @@ Canonical generation uses the exact system/user templates in
 `OK`, `REFUSAL`, `PARSE_FAILURE`, `TRUNCATED`, and `ERROR`; only infrastructure
 errors may retry, with three total attempts maximum.
 
-### Generation repeatability prompt selection — PRE-EXECUTION
+### Generation repeatability prompt manifest — PRE-EXECUTION
 
 - Repeatability prompt source: HotpotQA BEIR train, with evidence role
   `DEVELOPMENT`.
@@ -321,8 +321,24 @@ errors may retry, with three total attempts maximum.
   answers, retrieval scores, model outputs, or question-difficulty signal.
 - The gate remains 20 prompts × 3 calls × 3 LLMs = 180 calls, with `>=19/20`
   identical stripped-response triples required per model.
-- The materializer and focused tests are implemented. The real manifest has
-  not been materialized and no repeatability/model call has been made.
+- The manifest was materialized and validated on 2026-08-29, then committed
+  and pushed before any model call:
+  - path:
+    `artifacts/generation_repeatability/repeatability_prompts_v1.json`;
+  - containing Git commit:
+    `b2476eb88cb1a4cb4ee7b769cf3b1d555c75ca70`;
+  - `manifest_id`:
+    `generation-repeatability-prompts:sha256:92d9245529715258e9e26e802f6930859c03a4f5a2163e9883c0c37b7c023730`;
+  - file SHA-256:
+    `050021610e4fabf3822432f6d8f4b1571949100444a5f0a7dca8606faba3003e`;
+  - `prompt_count=20`, `dataset=hotpotqa`, `evidence_role=DEVELOPMENT`,
+    `context_mode=without_context`;
+  - prompt protocol: `sprint3.generation.pubmedqa.v1`.
+- HotpotQA `DEVELOPMENT` questions serve only as a legitimate development
+  prompt population for a serving-repeatability gate. This is **not** a
+  HotpotQA performance experiment.
+- All manifest validation checks passed. Maki/model calls remain 0, and the
+  180-call repeatability gate has not yet been executed.
 
 ## Diversification methods
 
@@ -436,8 +452,9 @@ implementations are required before canonical evaluation.
   replace the historical Sprint-1 retrieval values recorded above.
 - The generation repeatability prompt-manifest materializer and focused tests
   are implemented, and the exact deterministic 20-prompt selection rule is
-  documented. The real prompt manifest has not been materialized and the
-  180-call repeatability gate has not been executed.
+  documented. The validated 20-prompt `DEVELOPMENT` manifest was materialized,
+  committed, and pushed before any model calls. Its identity is recorded in
+  the PRE-EXECUTION section above; the 180-call gate has not been executed.
 - Frozen Sprint-3 scientific protocols and amendments through current HEAD.
 
 ## Missing work
@@ -454,10 +471,10 @@ implementations are required before canonical evaluation.
   candidate producers;
 - HotpotQA full-corpus resource pilot and full-build validation;
 - canonical diversification artifact production;
-- materialization/freezing of the real 20-prompt `DEVELOPMENT` repeatability
-  manifest, provenance binding of the three physical Maki model identities,
-  secure `MAKI_API_KEY` configuration, and execution/passage of the frozen
-  repeatability gate before any 1,000-row generation block;
+- provenance binding of the three physical Maki model identities, secure
+  `MAKI_API_KEY` configuration, and execution/passage of the frozen
+  repeatability gate before any 1,000-row generation block; manifest
+  materialization/freezing is complete;
 - decomposer bake-off, immutable winner snapshot, and claim artifacts;
 - NLI snapshot, human annotation, threshold fitting/validation, and evaluator
   bundle;
@@ -584,8 +601,10 @@ backfills in separate, explicitly labelled run directories.
 
 - Mode: EXECUTION STARTED
 - Current sprint: SPRINT 1 COMPLETION
-- Last completed: current PubMedQA relevance-only selected contexts and
-  controlled-replication retrieval analysis, separate from historical Sprint 1
+- Last completed: validated generation repeatability `DEVELOPMENT` manifest
+  materialized, committed, and pushed before any model calls; current PubMedQA
+  relevance-only selected contexts and controlled-replication retrieval
+  analysis were completed earlier and remain separate from historical Sprint 1
 - Current task: build the professor-facing
   `notebooks/sprint1/01_pubmedqa_baseline.ipynb` from saved artifacts while
   closing generation pre-execution blockers
@@ -606,17 +625,21 @@ backfills in separate, explicitly labelled run directories.
   are Contriever 0.740371, ColBERTv2 0.738210, BM25 0.599211, and DPR 0.325259;
   these are not the historical Sprint-1 retrieval values.
 - Generation infrastructure and repeatability-manifest focused tests pass; the
-  deterministic 20-prompt selection rule is implemented and documented.
+  deterministic 20-prompt selection rule is implemented and documented. The
+  validated manifest at
+  `artifacts/generation_repeatability/repeatability_prompts_v1.json` is frozen
+  in commit `b2476eb88cb1a4cb4ee7b769cf3b1d555c75ca70` and was pushed before
+  any model calls.
 - SELECTION: BLOCKED pending professor numeric-rule adjudication
 - Protected-final execution: NOT STARTED
 - Canonical generation status: zero generation artifacts and zero Maki/model
-  calls. The real repeatability prompt manifest is not yet materialized, the
-  180-call repeatability gate is not yet executed, and all 15 governed blocks
-  and 15,000 canonical rows remain pending.
-- Immediate blockers: materialize and freeze the real 20-prompt `DEVELOPMENT`
-  manifest; resolve and provenance-bind the three physical Maki model
-  identities; configure `MAKI_API_KEY` securely; pass the repeatability gate
-  before any 1,000-row generation block.
+  calls. Manifest materialization is complete, the 180-call repeatability gate
+  is not yet executed, and all 15 governed blocks and 15,000 canonical rows
+  remain pending.
+- Immediate blockers: resolve and provenance-bind the physical identities of
+  `llama-3.3-70b`, `gemma4-26b`, and `ministral-3-14b`; configure
+  `MAKI_API_KEY` securely; execute and pass the frozen 180-call repeatability
+  gate; only then open any 1,000-row generation block.
 - Historical Sprint-1/Sprint-2 evidence remains unchanged and separate from
   the current controlled replication.
 - Branch: `sprint3`
@@ -629,11 +652,10 @@ backfills in separate, explicitly labelled run directories.
 
 ## Exact next action
 
-Materialize and freeze the real deterministic 20-prompt `DEVELOPMENT`
-repeatability manifest. Then resolve and provenance-bind the three physical
-Maki model identities, configure `MAKI_API_KEY` securely, and execute the
-180-call repeatability gate. Do not register or execute any 1,000-row
-generation block before the gate passes.
+Resolve and provenance-bind the physical identities of `llama-3.3-70b`,
+`gemma4-26b`, and `ministral-3-14b`; configure `MAKI_API_KEY` securely; then
+execute and pass the frozen 180-call repeatability gate. Only after the gate
+passes may any 1,000-row generation block open.
 
 ## Known contradictions and superseded statements
 
