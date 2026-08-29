@@ -1,5 +1,22 @@
 # Sprint 3 Decision Log
 
+## 2026-08-29 — Post-reserve generator fallback order
+
+- **Decision:** After `qwen3.5-122b` failed the frozen v3 repeatability gate at
+  8/20, test `minimax-m2.7`, then `qwen3.8-27b`, then `qwen3.6-36b`, stopping at
+  the first candidate that passes every frozen admission requirement.
+- **Reason:** Preserve a three-generator design and meaningful model-family
+  heterogeneity while preventing answer-quality comparison or post-hoc model
+  shopping. MiniMax is first as an independent family relative to retained
+  Llama and Gemma.
+- **Conditions:** Each reached candidate requires immutable provenance,
+  provider-supported development configuration, seed `20260823` verification,
+  a new binding, and a new complete gate with `>=19/20` for all three models.
+  Existing gates/bindings remain immutable; canonical generation stays blocked
+  until a candidate passes; selection/protected outcomes remain unopened.
+- **Authority:**
+  `docs/sprint3/EXPERIMENT_STAGE_GATE_PROTOCOL_AMENDMENT_03.md`.
+
 ## 2026-08-29 — Prospective reserve-LLM substitution
 
 - **Decision:** Replace `ministral-3-14b` with the already-frozen reserve
