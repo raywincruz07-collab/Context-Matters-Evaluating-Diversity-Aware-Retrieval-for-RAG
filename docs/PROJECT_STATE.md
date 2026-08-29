@@ -406,14 +406,19 @@ implementations are required before canonical evaluation.
   prospective execution; the PubMedQA Contriever missing-only path is ready
   for a final clean-HEAD confirmation after the prospective three-attempt
   retrieval infrastructure ceiling was documented and centrally enforced;
-- dataset/run configuration bundles and generation/evaluator output schemas;
-- full current PubMedQA Contriever/ColBERT candidate materialization;
+- physical generation model bindings and evaluator output schemas; the
+  canonical PubMedQA prompt, selected-context, generation-row, Maki adapter,
+  repeatability-gate, missing-only runner, and governed block interfaces are
+  now implemented but have made no model calls;
+- local co-location and exact identity validation of the already-completed
+  RunPod PubMedQA Contriever and ColBERTv2 candidate sets and ColBERT index;
 - HotpotQA and ASQA source acquisition, manifests, full corpora, indexes, and
   candidate producers;
 - HotpotQA full-corpus resource pilot and full-build validation;
 - canonical diversification artifact production;
-- canonical generation runner, prompt assets, physical model identities, and
-  repeatability gates;
+- physical Maki model identities, local co-location/validation of all four
+  candidate sets, materialization of relevance-only selected contexts, and
+  execution of the frozen generator repeatability gate;
 - decomposer bake-off, immutable winner snapshot, and claim artifacts;
 - NLI snapshot, human annotation, threshold fitting/validation, and evaluator
   bundle;
@@ -519,44 +524,52 @@ backfills in separate, explicitly labelled run directories.
 
 - Mode: EXECUTION STARTED
 - Current sprint: SPRINT 1 COMPLETION
-- Last completed: Contriever clean-HEAD preflight identified and corrected
-  frozen retrieval retry ceiling enforcement
-- Current task: Contriever Stage-1 final preflight confirmation
+- Last completed: canonical governed PubMedQA generation subsystem
+  implemented without retrieval or model/API execution
+- Current task: generation pre-execution closure: physical Maki model-ID
+  resolution, candidate co-location/validation, and repeatability execution
 - Current candidate status:
   - BM25: 1,000/1,000 reusable
   - DPR: 1,000/1,000 reusable
-  - Contriever: 3/1,000 reusable; missing exactly IDs 3–999
-  - ColBERTv2: 0/1,000
+  - Contriever: 3/1,000 currently co-located in WSL; independently validated
+    RunPod set is 1,000/1,000 and must be co-located/identity-validated, not rerun
+  - ColBERTv2: 0/1,000 currently co-located in WSL; RunPod contains 1,000
+    candidates and the completed canonical index, which must be
+    co-located/identity-validated, not rerun
 - Production registry: 0 experiment records
-- Lifecycle-correction verification: 48 registry tests, 46 focused
-  candidate-production/Contriever tests, and 1,287 full-repository tests passed
+- Generation-infrastructure verification: 21 focused generation tests, 48
+  existing registry tests, 320 relevant retrieval-artifact/manifest/candidate
+  tests, and 1,308 full-repository tests passed
 - SELECTION: BLOCKED pending professor numeric-rule adjudication
 - Protected-final execution: NOT STARTED
 - Experiments launched: none; the production registry contains zero experiment
   records, historical Sprint-1/Sprint-2 evidence remains unchanged, and no
   scientific result is compromised
-- Pre-execution dependency: retain mandatory runner integration for every
-  prospective execution; the governed Contriever path is implemented, while
-  remaining canonical runners still require integration
-- Next action: commit the lifecycle correction, then perform a focused
-  read-only confirmation that Gate 14 passes and all previously validated
-  scientific identities remain unchanged before registering or executing the
-  Contriever Stage-1 run
+- Canonical generation status: subsystem implemented; zero model/API calls;
+  repeatability gate pending; all 15 governed blocks and 15,000 canonical rows
+  remain pending
+- Pre-execution dependency: resolve and provenance-bind the three physical
+  Maki model IDs; co-locate and validate all four candidate sets and required
+  neural index identities; materialize the 4,000 missing-only selected-context
+  artifacts; freeze the exact 20-prompt DEVELOPMENT repeatability manifest;
+  pass the 180-call gate before opening any 1,000-row generation block
+- Next action: perform the physical-model and candidate/context preflight;
+  do not register or execute a generation block until every prerequisite and
+  the matching repeatability gate pass
 - Branch: `sprint3`
-- Checkpoint parent HEAD: `32a2ecc5cebec189086287040c96fb80f10389e7`
+- Implementation base HEAD: `ac18535d19ab49a5b2a9a345e9602c6d5631c089`
 - Registry implementation audit-start working tree: clean
-- Checkpoint files: `src/run_registry.py`,
-  `src/retrieval_artifacts/contracts.py`,
-  `artifacts/run_registry/run_registry_v1.jsonl`,
-  `artifacts/run_registry/evidence_manifest_authority_v1.json`, focused
-  registry tests, and this continuity update; historical inputs unchanged
+- Current implementation files: `src/generation/`, the three governed
+  PubMedQA generation/context/repeatability CLIs, two focused generation test
+  modules, and this continuity update; historical inputs unchanged
 
 ## Exact next action
 
-Commit the retrieval lifecycle correction, then perform a focused read-only
-confirmation that Gate 14 passes and all previously validated scientific
-identities remain unchanged. Do not register or execute the Contriever Stage-1
-prospective run until that clean-HEAD confirmation passes.
+Resolve the three physical Maki model identities and co-locate/validate the
+four current PubMedQA candidate sets and neural index identities. Then
+materialize exact relevance-only selected contexts and freeze/execute the
+20-prompt repeatability gate. Do not register or execute any 1,000-row
+generation block before those prerequisites pass.
 
 ## Known contradictions and superseded statements
 
