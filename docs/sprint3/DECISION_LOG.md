@@ -1,5 +1,70 @@
 # Sprint 3 Decision Log
 
+## 2026-08-30 — Qwen3.6 admitted as final fallback generator
+
+- **Decision:** Candidate physical model `qwen3.6-36b` occupies the frozen
+  logical third-generator slot `ministral-3-14b` under binding
+  `configs/sprint3/maki_model_bindings_v7.json`, with seed `20260823`. Qwen3.6
+  satisfied every frozen repeatability admission requirement reached under
+  Amendment 03 and is therefore **ADMITTED** as the physical generator for the
+  frozen logical third slot.
+- **Endpoint and revision provenance:** The read-only maKI model inventory
+  exposed `qwen3.6-36b` and `qwen3.6-36b-thinking` as distinct physical
+  endpoints. Neither inventory entry exposed a model revision; provenance
+  therefore records `model_revision: null` and
+  `model_revision_kind: NOT_PROVIDED_BY_PROVIDER`. The selected endpoint is the
+  normal/non-thinking `qwen3.6-36b`, with direct-mode status
+  `SUPPORTED_AND_ENABLED` and an empty direct-mode control (`{}`). The empty
+  control is intentional because the provider exposes distinct normal and
+  thinking physical endpoints: non-thinking behavior is selected by
+  `qwen3.6-36b` itself, not by adding an unverified request control.
+- **Bounded DEVELOPMENT operability diagnostic:** Before binding, a bounded
+  diagnostic used frozen prompt ID `5ab7ba1b55429928e1fe38b1` with evidence role
+  `DEVELOPMENT`. The request used model `qwen3.6-36b`, seed `20260823`,
+  `temperature=0`, `max_tokens=256`, `n=1`, `stream=false`, and no extra
+  thinking-control field. It returned HTTP 200, returned model `qwen3.6-36b`,
+  no exposed system fingerprint (`null`), `finish_reason = stop`, final content
+  present, reasoning content absent, `prompt_tokens = 112`,
+  `completion_tokens = 72`, and `total_tokens = 184`. The diagnostic result was
+  `OPERABLE_AND_NON_THINKING`.
+- **Immutable complete-gate evidence:**
+  `artifacts/generation_repeatability/repeatability_gate_v6.json`, gate ID
+  `generation-repeatability-gate:sha256:2b4cf99bea47ebf6112c658fa408c59c235a61c570be223de0d15ae2c0cb9cb7`,
+  scientific SHA256
+  `2b4cf99bea47ebf6112c658fa408c59c235a61c570be223de0d15ae2c0cb9cb7`,
+  file SHA256
+  `67ce1f87047325b81670467c1f8d254dfeaec4bfd90cdae44763c5485bca6f03`.
+  The frozen threshold was `>=19/20` exact three-repetition stripped-output
+  equality per model. The complete gate recorded `llama-3.3-70b` at 20/20
+  (**PASS**), `gemma4-26b` at 20/20 (**PASS**), and `qwen3.6-36b` at 20/20
+  (**PASS**); the overall complete gate was **PASS**.
+- **Qwen3.6 call health:** The gate contains 60 total Qwen3.6 call records, with
+  zero missing-raw-content calls, zero transport-exhausted calls, and zero
+  provider refusals. All 60 had `finish_reason = stop`; all 60 attempts had
+  outcome `SUCCESS`, with zero attempt errors. The system fingerprint was not
+  exposed for any of the 60 responses (`null`), and there were zero failed
+  repeatability prompt IDs.
+- **Admission basis and stop rule:** Admission is based on the prospective
+  operability, provenance, and repeatability requirements, not on answer
+  quality. No correctness, faithfulness, retrieval, or downstream quality
+  comparison was used to select Qwen3.6. The Amendment 03 stop rule is now
+  reached, fallback-model testing stops, and no additional generator candidate
+  is to be tested for this admission sequence.
+- **Admitted physical generator roster:**
+
+  1. `llama-3.3-70b`
+  2. `gemma4-26b`
+  3. `qwen3.6-36b`
+
+  Internally, the third matrix/contrast logical ID remains `ministral-3-14b`;
+  `qwen3.6-36b` is its admitted physical model provenance.
+- **Scope and exposure boundary:** The generator-admission repeatability
+  blocker is now cleared. This does not establish that unrelated Sprint 3 stage
+  gates are automatically satisfied. `SELECTION` and `PROJECT_PROTECTED_FINAL`
+  outcomes remained unopened throughout fallback configuration and admission.
+- **Authority:**
+  `docs/sprint3/EXPERIMENT_STAGE_GATE_PROTOCOL_AMENDMENT_03.md`.
+
 ## 2026-08-30 — Qwen3.8 fallback rejection under frozen repeatability criterion
 
 - **Decision:** Candidate physical model `qwen3.8-27b` occupied the frozen
