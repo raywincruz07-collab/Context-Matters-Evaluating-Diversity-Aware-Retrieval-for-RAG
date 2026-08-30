@@ -19,6 +19,7 @@ for value in (REPOSITORY_ROOT, SRC_DIR):
 from generation._io import stable_json_sha256
 from generation.cli_support import (
     adapter_from_bindings,
+    canonical_generation_git_identity,
     git_registry_identity,
     load_model_bindings,
     load_pubmedqa_runtime_local_only,
@@ -118,7 +119,20 @@ def _build_inputs(args: argparse.Namespace, *, registered_planned=None):
     block = GenerationBlock(args.context_mode, args.llm, args.retriever)
     adapter = adapter_from_bindings(bindings, args.llm)
     runtime = load_pubmedqa_runtime_local_only(cache_dir=args.cache_dir)
-    git = git_registry_identity()
+    uses_canonical_generation_identity = (
+        args.action == "run"
+        and registered_planned is None
+        and args.registry.resolve() == DEFAULT_REGISTRY_PATH.resolve()
+        and (
+            args.evidence_authority.resolve()
+            == DEFAULT_EVIDENCE_AUTHORITY_PATH.resolve()
+        )
+    )
+    git = (
+        canonical_generation_git_identity()
+        if uses_canonical_generation_identity
+        else git_registry_identity()
+    )
     if registered_planned is None and not git["worktree_clean"]:
         raise RuntimeError("canonical generation requires a clean worktree")
     sample_manifest_path = REPOSITORY_ROOT / "artifacts/sample_manifests/pubmedqa_sample_manifest_v2.json"

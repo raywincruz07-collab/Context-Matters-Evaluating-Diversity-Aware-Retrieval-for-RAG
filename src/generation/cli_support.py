@@ -8,15 +8,27 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
+import tempfile
 from typing import Any, Mapping
 
 from generation._io import file_sha256, stable_json_sha256
 from generation.maki import CanonicalMakiAdapter, MakiConfig, PRIMARY_LLM_LOGICAL_IDS
+from run_registry import append_run_record, read_registry
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_CANONICAL_REGISTRY_PATH = Path("artifacts/run_registry/run_registry_v1.jsonl")
+_CANONICAL_EVIDENCE_AUTHORITY_PATH = Path(
+    "artifacts/run_registry/evidence_manifest_authority_v1.json"
+)
+_PUBMEDQA_GENERATION_ROOT = Path("results/sprint3/raw/pubmedqa/generation")
+_PUBMEDQA_GENERATION_RETRIEVERS = frozenset(
+    {"bm25", "dpr", "contriever", "colbertv2"}
+)
+_GENERATION_SAMPLE_NAME_RE = re.compile(r"sample_([0-9]{4})\.json")
 
 
 def load_pubmedqa_runtime_local_only(*, cache_dir: Path | None = None):
@@ -94,6 +106,189 @@ def git_registry_identity(repository_root: Path = REPOSITORY_ROOT) -> dict[str, 
         "branch": branch,
         "worktree_clean": clean,
         "worktree_diff_sha256": diff_sha,
+    }
+
+
+def _validated_pubmedqa_generation_output_directories(
+    *, registry_path: Path, evidence_authority_path: Path
+) -> frozenset[Path] | None:
+    try:
+        records = read_registry(
+            registry_path,
+            evidence_authority_path=evidence_authority_path,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="context-matters-registry-validation-"
+        ) as temporary_directory:
+            replay_path = Path(temporary_directory) / "registry.jsonl"
+            for record in records:
+                if not append_run_record(
+                    replay_path,
+                    record,
+                    evidence_authority_path=evidence_authority_path,
+                ):
+                    return None
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+    result: set[Path] = set()
+    for record in records:
+        if (
+            record["run_type"] != "GENERATION"
+            or record["data"]["dataset"] != "pubmedqa"
+        ):
+            continue
+        logical_model_id = record["generation"]["llm_logical_id"]
+        if logical_model_id not in PRIMARY_LLM_LOGICAL_IDS:
+            continue
+        context_mode = record["context_mode"]
+        retrieval = record["retrieval"]
+        if context_mode == "without_context" and retrieval is None:
+            expected_output_directory = (
+                _PUBMEDQA_GENERATION_ROOT
+                / "without_context"
+                / logical_model_id
+            )
+        elif context_mode == "with_context" and retrieval is not None:
+            retriever = retrieval["retriever"]
+            if retriever not in _PUBMEDQA_GENERATION_RETRIEVERS:
+                continue
+            expected_output_directory = (
+                _PUBMEDQA_GENERATION_ROOT
+                / "with_context"
+                / retriever
+                / logical_model_id
+            )
+        else:
+            continue
+        output_directory = Path(record["output"]["output_directory"])
+        if output_directory == expected_output_directory:
+            result.add(output_directory)
+    return frozenset(result)
+
+
+def _is_registered_generation_output(
+    path: Path, *, allowed_output_directories: frozenset[Path]
+) -> bool:
+    if path.parent not in allowed_output_directories:
+        return False
+    if path.name == "generation_output_inventory_v1.json":
+        return True
+    match = _GENERATION_SAMPLE_NAME_RE.fullmatch(path.name)
+    return match is not None and int(match.group(1)) <= 999
+
+
+def canonical_generation_git_identity(
+    repository_root: Path = REPOSITORY_ROOT,
+) -> dict[str, Any]:
+    """Return source identity while excluding validated canonical run evidence.
+
+    This specialization accepts only append-only changes to the canonical run
+    registry and untracked PubMedQA generation outputs whose directories have
+    registry lineage. All other changes retain :func:`git_registry_identity`'s
+    strict dirty-worktree result.
+    """
+    repository_root = Path(repository_root).resolve()
+    registry_path = repository_root / _CANONICAL_REGISTRY_PATH
+    evidence_authority_path = repository_root / _CANONICAL_EVIDENCE_AUTHORITY_PATH
+
+    commit = subprocess.run(
+        ("git", "rev-parse", "HEAD"),
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    branch = subprocess.run(
+        ("git", "branch", "--show-current"),
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        (
+            "git",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ),
+        cwd=repository_root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    if not status:
+        return {
+            "commit": commit,
+            "branch": branch,
+            "worktree_clean": True,
+            "worktree_diff_sha256": None,
+        }
+
+    registry_modified = False
+    untracked_paths: list[Path] = []
+    for entry in status.split(b"\0"):
+        if not entry:
+            continue
+        if len(entry) < 4 or entry[2:3] != b" ":
+            return git_registry_identity(repository_root)
+        state = entry[:2]
+        raw_path = entry[3:]
+        path = Path(os.fsdecode(raw_path))
+        if path.is_absolute() or ".." in path.parts:
+            return git_registry_identity(repository_root)
+        if path == _CANONICAL_REGISTRY_PATH and state == b" M":
+            registry_modified = True
+        elif state == b"??":
+            untracked_paths.append(path)
+        else:
+            # This also rejects staged changes, tracked output modifications,
+            # renames/copies, and every non-runtime repository path.
+            return git_registry_identity(repository_root)
+
+    if registry_modified:
+        committed_registry = subprocess.run(
+            ("git", "show", f"HEAD:{_CANONICAL_REGISTRY_PATH.as_posix()}"),
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+        )
+        if committed_registry.returncode != 0:
+            return git_registry_identity(repository_root)
+        try:
+            current_registry = registry_path.read_bytes()
+        except OSError:
+            return git_registry_identity(repository_root)
+        if (
+            len(current_registry) <= len(committed_registry.stdout)
+            or not current_registry.startswith(committed_registry.stdout)
+        ):
+            return git_registry_identity(repository_root)
+
+    allowed_output_directories = _validated_pubmedqa_generation_output_directories(
+        registry_path=registry_path,
+        evidence_authority_path=evidence_authority_path,
+    )
+    if allowed_output_directories is None:
+        return git_registry_identity(repository_root)
+    for path in untracked_paths:
+        absolute_path = repository_root / path
+        if (
+            absolute_path.is_symlink()
+            or not absolute_path.is_file()
+            or not _is_registered_generation_output(
+                path,
+                allowed_output_directories=allowed_output_directories,
+            )
+        ):
+            return git_registry_identity(repository_root)
+
+    return {
+        "commit": commit,
+        "branch": branch,
+        "worktree_clean": True,
+        "worktree_diff_sha256": None,
     }
 
 
