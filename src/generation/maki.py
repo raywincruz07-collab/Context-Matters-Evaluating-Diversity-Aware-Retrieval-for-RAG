@@ -22,6 +22,7 @@ PRIMARY_LLM_LOGICAL_IDS = (
 _FROZEN_REQUEST_KEYS = frozenset(
     {"model", "messages", "temperature", "max_tokens", "n", "stream", "seed"}
 )
+_BEARER_TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/\-]+=*")
 _SECRET_PATTERNS = (
     re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+"),
     re.compile(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s,;]+"),
@@ -232,6 +233,11 @@ class CanonicalMakiAdapter:
         if not value.strip():
             raise MakiInfrastructureError(
                 f"required environment variable {self.api_key_env} is not set"
+            )
+        if _BEARER_TOKEN_RE.fullmatch(value) is None:
+            raise MakiInfrastructureError(
+                f"required environment variable {self.api_key_env} cannot safely "
+                "form a Bearer authorization header"
             )
         return value
 

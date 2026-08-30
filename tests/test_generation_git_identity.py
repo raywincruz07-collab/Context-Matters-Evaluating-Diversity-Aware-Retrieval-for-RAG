@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from generation.cli_support import (  # noqa: E402
     canonical_generation_git_identity,
     git_registry_identity,
+    pubmedqa_generation_replacement_output_directory,
+    validate_pubmedqa_generation_replacement,
 )
 from scripts import run_pubmedqa_generation as generation_cli  # noqa: E402
 from run_registry import (  # noqa: E402
@@ -24,6 +26,7 @@ from run_registry import (  # noqa: E402
     finalize_planned_record,
     output_artifact,
     output_inventory_sha256,
+    read_registry,
     stable_json_sha256,
     validate_run_record,
 )
@@ -32,6 +35,7 @@ from run_registry import (  # noqa: E402
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
+REPLACEMENT_GIT_COMMIT = "d" * 40
 CANONICAL_REGISTRY = Path("artifacts/run_registry/run_registry_v1.jsonl")
 CANONICAL_AUTHORITY = Path(
     "artifacts/run_registry/evidence_manifest_authority_v1.json"
@@ -110,6 +114,8 @@ def _planned_record(
     logical_model_id: str = "llama-3.3-70b",
     context_mode: str = "without_context",
     retriever: str = "bm25",
+    git_commit: str | None = None,
+    parent_run_id: str | None = None,
 ) -> dict:
     has_context = context_mode == "with_context"
     return finalize_planned_record(
@@ -123,7 +129,7 @@ def _planned_record(
             "origin": "CURRENT_PROTOCOL",
             "protocol_config_bundle_sha256": SHA_A,
             "git": {
-                "commit": repository.commit,
+                "commit": repository.commit if git_commit is None else git_commit,
                 "branch": "sprint3",
                 "worktree_clean": True,
                 "worktree_diff_sha256": None,
@@ -207,7 +213,7 @@ def _planned_record(
                 "status": "PLANNED",
                 "attempt_count": 0,
                 "failure_reason": None,
-                "parent_run_id": None,
+                "parent_run_id": parent_run_id,
                 "resume_of": None,
             },
             "output": {
@@ -233,6 +239,8 @@ def _append_planned(
     logical_model_id: str = "llama-3.3-70b",
     context_mode: str = "without_context",
     retriever: str = "bm25",
+    git_commit: str | None = None,
+    parent_run_id: str | None = None,
 ) -> dict:
     planned = _planned_record(
         repository,
@@ -240,6 +248,8 @@ def _append_planned(
         logical_model_id=logical_model_id,
         context_mode=context_mode,
         retriever=retriever,
+        git_commit=git_commit,
+        parent_run_id=parent_run_id,
     )
     assert append_run_record(
         repository.registry,
@@ -267,6 +277,78 @@ def _running(repository: IsolatedRepository, planned: dict) -> dict:
         evidence_authority_path=repository.authority,
     )
     return running
+
+
+def _complete_with_error_rows(
+    repository: IsolatedRepository,
+    planned: dict,
+    *,
+    failed_row_count: int = 660,
+) -> dict:
+    running = _running(repository, planned)
+    inventory_path = _write_output(
+        repository,
+        Path(planned["output"]["output_directory"])
+        / "generation_output_inventory_v1.json",
+    )
+    artifact = output_artifact(
+        inventory_path,
+        repository_root=repository.root,
+        row_count=1000,
+        status_counts={"OK": 1000 - failed_row_count, "ERROR": failed_row_count},
+    )
+    complete = deepcopy(running)
+    complete["execution"].update(
+        {
+            "completed_at": "2026-08-30T00:00:02Z",
+            "status": "COMPLETE",
+        }
+    )
+    complete["output"].update(
+        {
+            "completed_row_count": 1000,
+            "successful_row_count": 1000 - failed_row_count,
+            "failed_row_count": failed_row_count,
+            "artifacts": [artifact],
+            "output_inventory_sha256": output_inventory_sha256([artifact]),
+            "raw_artifact_sha256": artifact["sha256"],
+        }
+    )
+    complete = validate_run_record(
+        complete,
+        evidence_authority_path=repository.authority,
+    )
+    assert append_run_record(
+        repository.registry,
+        complete,
+        evidence_authority_path=repository.authority,
+    )
+    return complete
+
+
+def _eligible_replacement_parent(repository: IsolatedRepository) -> dict:
+    planned = _append_planned(repository)
+    return _complete_with_error_rows(repository, planned)
+
+
+def _append_replacement(
+    repository: IsolatedRepository,
+    parent: dict,
+    *,
+    output_directory: Path | None = None,
+    logical_model_id: str = "llama-3.3-70b",
+) -> dict:
+    canonical_output = pubmedqa_generation_replacement_output_directory(
+        parent_run_id=parent["run_id"],
+        replacement_git_commit=REPLACEMENT_GIT_COMMIT,
+    )
+    return _append_planned(
+        repository,
+        output_directory=canonical_output if output_directory is None else output_directory,
+        logical_model_id=logical_model_id,
+        git_commit=REPLACEMENT_GIT_COMMIT,
+        parent_run_id=parent["run_id"],
+    )
 
 
 def _write_output(
@@ -363,6 +445,164 @@ def test_canonical_generation_identity_accepts_exact_with_context_directory(
     )
 
     _assert_clean(_identity(repository), repository)
+
+
+def test_canonical_generation_identity_accepts_registered_replacement_directory(
+    repository: IsolatedRepository,
+) -> None:
+    parent = _eligible_replacement_parent(repository)
+    replacement = _append_replacement(repository, parent)
+    replacement_output = Path(replacement["output"]["output_directory"])
+    _write_output(repository, replacement_output / "sample_0000.json")
+
+    assert replacement["run_id"] != parent["run_id"]
+    assert replacement["execution"]["parent_run_id"] == parent["run_id"]
+    assert replacement_output != Path(parent["output"]["output_directory"])
+    records = read_registry(
+        repository.registry,
+        evidence_authority_path=repository.authority,
+    )
+    assert validate_pubmedqa_generation_replacement(records[:-1], replacement) == parent
+    _assert_clean(_identity(repository), repository)
+
+
+def test_replacement_lineage_rejects_parent_commit_reuse(
+    repository: IsolatedRepository,
+) -> None:
+    parent = _eligible_replacement_parent(repository)
+    output = pubmedqa_generation_replacement_output_directory(
+        parent_run_id=parent["run_id"],
+        replacement_git_commit=parent["git"]["commit"],
+    )
+    replacement = _planned_record(
+        repository,
+        output_directory=output,
+        git_commit=parent["git"]["commit"],
+        parent_run_id=parent["run_id"],
+    )
+    records = read_registry(
+        repository.registry,
+        evidence_authority_path=repository.authority,
+    )
+
+    with pytest.raises(ValueError, match="later amendment Git commit"):
+        validate_pubmedqa_generation_replacement(records, replacement)
+
+
+def test_canonical_generation_identity_rejects_arbitrary_replacement_directory(
+    repository: IsolatedRepository,
+) -> None:
+    parent = _eligible_replacement_parent(repository)
+    arbitrary = CANONICAL_OUTPUT_ROOT / "replacements" / parent["run_id"] / "arbitrary"
+    _append_replacement(repository, parent, output_directory=arbitrary)
+    _write_output(repository, arbitrary / "sample_0000.json")
+
+    _assert_dirty(_identity(repository), repository)
+
+
+def test_replacement_lineage_rejects_missing_parent(
+    repository: IsolatedRepository,
+) -> None:
+    missing_parent = "run-missing-parent-" + "1" * 24
+    output = pubmedqa_generation_replacement_output_directory(
+        parent_run_id=missing_parent,
+        replacement_git_commit=REPLACEMENT_GIT_COMMIT,
+    )
+    replacement = _append_planned(
+        repository,
+        output_directory=output,
+        git_commit=REPLACEMENT_GIT_COMMIT,
+        parent_run_id=missing_parent,
+    )
+    _write_output(repository, output / "sample_0000.json")
+    records = read_registry(
+        repository.registry,
+        evidence_authority_path=repository.authority,
+    )
+
+    with pytest.raises(ValueError, match="absent"):
+        validate_pubmedqa_generation_replacement(records, replacement)
+    _assert_dirty(_identity(repository), repository)
+
+
+def test_replacement_lineage_rejects_nonterminal_parent(
+    repository: IsolatedRepository,
+) -> None:
+    parent = _append_planned(repository)
+    output = pubmedqa_generation_replacement_output_directory(
+        parent_run_id=parent["run_id"],
+        replacement_git_commit=REPLACEMENT_GIT_COMMIT,
+    )
+    replacement = _planned_record(
+        repository,
+        output_directory=output,
+        git_commit=REPLACEMENT_GIT_COMMIT,
+        parent_run_id=parent["run_id"],
+    )
+    records = read_registry(
+        repository.registry,
+        evidence_authority_path=repository.authority,
+    )
+
+    with pytest.raises(ValueError, match="terminal"):
+        validate_pubmedqa_generation_replacement(records, replacement)
+
+
+def test_replacement_lineage_rejects_parent_without_error_rows(
+    repository: IsolatedRepository,
+) -> None:
+    planned = _append_planned(repository)
+    parent = _complete_with_error_rows(repository, planned, failed_row_count=0)
+    output = pubmedqa_generation_replacement_output_directory(
+        parent_run_id=parent["run_id"],
+        replacement_git_commit=REPLACEMENT_GIT_COMMIT,
+    )
+    replacement = _planned_record(
+        repository,
+        output_directory=output,
+        git_commit=REPLACEMENT_GIT_COMMIT,
+        parent_run_id=parent["run_id"],
+    )
+    records = read_registry(
+        repository.registry,
+        evidence_authority_path=repository.authority,
+    )
+
+    with pytest.raises(ValueError, match="failed/error rows"):
+        validate_pubmedqa_generation_replacement(records, replacement)
+
+
+def test_replacement_lineage_rejects_mismatched_scientific_block(
+    repository: IsolatedRepository,
+) -> None:
+    parent = _eligible_replacement_parent(repository)
+    replacement = _append_replacement(
+        repository,
+        parent,
+        logical_model_id="gemma4-26b",
+    )
+    output = Path(replacement["output"]["output_directory"])
+    _write_output(repository, output / "sample_0000.json")
+    records = read_registry(
+        repository.registry,
+        evidence_authority_path=repository.authority,
+    )
+
+    with pytest.raises(ValueError, match="scientific identity differs"):
+        validate_pubmedqa_generation_replacement(records[:-1], replacement)
+    _assert_dirty(_identity(repository), repository)
+
+
+def test_registered_replacement_does_not_exempt_unrelated_source_edit(
+    repository: IsolatedRepository,
+) -> None:
+    parent = _eligible_replacement_parent(repository)
+    replacement = _append_replacement(repository, parent)
+    output = Path(replacement["output"]["output_directory"])
+    _write_output(repository, output / "sample_0000.json")
+    (repository.root / "src/example.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    _assert_dirty(_identity(repository), repository)
 
 
 def test_canonical_generation_identity_rejects_registered_arbitrary_descendant(
@@ -728,6 +968,7 @@ def test_canonical_generation_identity_rejects_staged_generation_output(
     ("action", "registered_planned", "custom_path", "expected_identity"),
     [
         ("run", None, None, "canonical"),
+        ("replace", None, None, "canonical"),
         ("resume", {}, None, "strict"),
         ("status", {}, None, "strict"),
         ("run", None, "registry", "strict"),

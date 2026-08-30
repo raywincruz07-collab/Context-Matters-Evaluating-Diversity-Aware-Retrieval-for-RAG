@@ -126,6 +126,7 @@ def build_generation_planned_record(
     runtime_sha256: str,
     hardware_summary: str,
     output_directory: str,
+    parent_run_id: str | None = None,
     evidence_authority_path: Path = DEFAULT_EVIDENCE_AUTHORITY_PATH,
 ) -> dict[str, Any]:
     if adapter.config.logical_model_id != block.llm_logical_id:
@@ -188,7 +189,7 @@ def build_generation_planned_record(
             "status": "PLANNED",
             "attempt_count": 0,
             "failure_reason": None,
-            "parent_run_id": None,
+            "parent_run_id": parent_run_id,
             "resume_of": None,
         },
         "output": {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import hashlib
 from importlib import metadata as importlib_metadata
 import json
@@ -16,7 +17,7 @@ from typing import Any, Mapping
 
 from generation._io import file_sha256, stable_json_sha256
 from generation.maki import CanonicalMakiAdapter, MakiConfig, PRIMARY_LLM_LOGICAL_IDS
-from run_registry import append_run_record, read_registry
+from run_registry import append_run_record, read_registry, run_identity_payload
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +30,8 @@ _PUBMEDQA_GENERATION_RETRIEVERS = frozenset(
     {"bm25", "dpr", "contriever", "colbertv2"}
 )
 _GENERATION_SAMPLE_NAME_RE = re.compile(r"sample_([0-9]{4})\.json")
+_RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]*-[0-9a-f]{24}")
+_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 
 
 def load_pubmedqa_runtime_local_only(*, cache_dir: Path | None = None):
@@ -109,6 +112,77 @@ def git_registry_identity(repository_root: Path = REPOSITORY_ROOT) -> dict[str, 
     }
 
 
+def require_pubmedqa_generation_replacement_parent(
+    records: Sequence[Mapping[str, Any]], parent_run_id: str
+) -> Mapping[str, Any]:
+    """Return an eligible terminal parent without changing registry evidence."""
+    matching = [record for record in records if record["run_id"] == parent_run_id]
+    if not matching:
+        raise ValueError("replacement parent run is absent from the governed registry")
+    parent = matching[-1]
+    if (
+        parent["run_type"] != "GENERATION"
+        or parent["data"]["dataset"] != "pubmedqa"
+    ):
+        raise ValueError("replacement parent must be a PubMedQA GENERATION run")
+    if parent["execution"]["status"] not in {"COMPLETE", "FAILED"}:
+        raise ValueError("replacement parent must be terminal")
+    if parent["output"]["failed_row_count"] <= 0:
+        raise ValueError("replacement parent must contain failed/error rows")
+    return parent
+
+
+def pubmedqa_generation_replacement_output_directory(
+    *, parent_run_id: str, replacement_git_commit: str
+) -> Path:
+    """Derive the only governed output directory for one replacement run."""
+    if _RUN_ID_RE.fullmatch(parent_run_id) is None:
+        raise ValueError("replacement parent run ID is invalid")
+    if _GIT_SHA_RE.fullmatch(replacement_git_commit) is None:
+        raise ValueError("replacement Git commit must be a full lowercase SHA")
+    return (
+        _PUBMEDQA_GENERATION_ROOT
+        / "replacements"
+        / parent_run_id
+        / replacement_git_commit
+    )
+
+
+def validate_pubmedqa_generation_replacement(
+    records: Sequence[Mapping[str, Any]], replacement: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    """Validate parent lineage, scientific identity, and the replacement path."""
+    if (
+        replacement["run_type"] != "GENERATION"
+        or replacement["data"]["dataset"] != "pubmedqa"
+        or replacement["execution"]["status"] != "PLANNED"
+    ):
+        raise ValueError("replacement must be a planned PubMedQA GENERATION run")
+    parent_run_id = replacement["execution"]["parent_run_id"]
+    if parent_run_id is None:
+        raise ValueError("replacement must record execution.parent_run_id")
+    parent = require_pubmedqa_generation_replacement_parent(records, parent_run_id)
+    if replacement["git"]["commit"] == parent["git"]["commit"]:
+        raise ValueError("replacement must use the later amendment Git commit")
+    if replacement["run_id"] == parent["run_id"]:
+        raise ValueError("replacement must have a distinct governed run ID")
+
+    parent_identity = run_identity_payload(parent)
+    replacement_identity = run_identity_payload(replacement)
+    parent_identity.pop("git")
+    replacement_identity.pop("git")
+    if replacement_identity != parent_identity:
+        raise ValueError("replacement scientific identity differs from its parent block")
+
+    expected_output_directory = pubmedqa_generation_replacement_output_directory(
+        parent_run_id=parent_run_id,
+        replacement_git_commit=replacement["git"]["commit"],
+    )
+    if Path(replacement["output"]["output_directory"]) != expected_output_directory:
+        raise ValueError("replacement output directory is not canonical")
+    return parent
+
+
 def _validated_pubmedqa_generation_output_directories(
     *, registry_path: Path, evidence_authority_path: Path
 ) -> frozenset[Path] | None:
@@ -132,11 +206,23 @@ def _validated_pubmedqa_generation_output_directories(
         return None
 
     result: set[Path] = set()
-    for record in records:
+    first_record_indexes: dict[str, int] = {}
+    for index, record in enumerate(records):
+        first_record_indexes.setdefault(record["run_id"], index)
+    for index, record in enumerate(records):
         if (
             record["run_type"] != "GENERATION"
             or record["data"]["dataset"] != "pubmedqa"
+            or first_record_indexes[record["run_id"]] != index
         ):
+            continue
+        parent_run_id = record["execution"]["parent_run_id"]
+        if parent_run_id is not None:
+            try:
+                validate_pubmedqa_generation_replacement(records[:index], record)
+            except (KeyError, TypeError, ValueError):
+                continue
+            result.add(Path(record["output"]["output_directory"]))
             continue
         logical_model_id = record["generation"]["llm_logical_id"]
         if logical_model_id not in PRIMARY_LLM_LOGICAL_IDS:

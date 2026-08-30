@@ -443,6 +443,53 @@ def test_maki_exact_payload_and_content_is_never_retried(monkeypatch):
     assert "super-secret-value" not in json.dumps(result.provider_metadata)
 
 
+@pytest.mark.parametrize(
+    "malformed_key",
+    [
+        "secret\raccidental-shell-text",
+        "secret\naccidental-shell-text",
+        "secret\taccidental-shell-text",
+        "secret key",
+        "secret\x1ftext",
+        "secret:unsupported",
+        "sëcret",
+    ],
+)
+def test_maki_rejects_malformed_bearer_credential_before_transport(
+    monkeypatch, malformed_key
+):
+    monkeypatch.setenv("MAKI_API_KEY", malformed_key)
+    calls = 0
+
+    def transport(**_):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("transport must not be called")
+
+    adapter = CanonicalMakiAdapter(_maki_config(), transport=transport)
+    with pytest.raises(MakiInfrastructureError, match="cannot safely form a Bearer") as exc:
+        adapter.complete(render_pubmedqa_prompt(question="Q?"))
+
+    assert calls == 0
+    assert malformed_key not in str(exc.value)
+
+
+def test_maki_missing_credential_still_fails_before_transport(monkeypatch):
+    monkeypatch.delenv("MAKI_API_KEY", raising=False)
+    calls = 0
+
+    def transport(**_):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("transport must not be called")
+
+    adapter = CanonicalMakiAdapter(_maki_config(), transport=transport)
+    with pytest.raises(MakiInfrastructureError, match="MAKI_API_KEY is not set"):
+        adapter.complete(render_pubmedqa_prompt(question="Q?"))
+
+    assert calls == 0
+
+
 def test_maki_retries_only_infrastructure_at_most_three(monkeypatch):
     monkeypatch.setenv("MAKI_API_KEY", "secret")
     calls = 0

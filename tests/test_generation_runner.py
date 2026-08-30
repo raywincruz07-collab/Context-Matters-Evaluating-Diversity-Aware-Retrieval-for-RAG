@@ -100,13 +100,20 @@ def _bindings():
     return {logical_id: _config(logical_id) for logical_id in PRIMARY_LLM_LOGICAL_IDS}
 
 
-def _planned(adapter, authority, *, output="outputs"):
+def _planned(
+    adapter,
+    authority,
+    *,
+    output="outputs",
+    git_commit=GIT_SHA,
+    parent_run_id=None,
+):
     return build_generation_planned_record(
         created_at="2026-08-24T00:00:00Z",
         block=GenerationBlock("without_context", adapter.config.logical_model_id),
         adapter=adapter,
         git={
-            "commit": GIT_SHA,
+            "commit": git_commit,
             "branch": "sprint3",
             "worktree_clean": True,
             "worktree_diff_sha256": None,
@@ -122,8 +129,27 @@ def _planned(adapter, authority, *, output="outputs"):
         runtime_sha256=stable_json_sha256({"adapter": "fixture"}),
         hardware_summary="fixture",
         output_directory=output,
+        parent_run_id=parent_run_id,
         evidence_authority_path=authority,
     )
+
+
+def test_replacement_has_distinct_run_identity_after_amendment_commit(
+    tmp_path,
+):
+    authority = tmp_path / "authority.json"
+    _authority(authority)
+    adapter = CanonicalMakiAdapter(_config("llama-3.3-70b"), transport=lambda **_: {})
+    parent = _planned(adapter, authority, git_commit="1" * 40)
+    replacement = _planned(
+        adapter,
+        authority,
+        git_commit="2" * 40,
+        parent_run_id=parent["run_id"],
+    )
+
+    assert replacement["run_id"] != parent["run_id"]
+    assert replacement["execution"]["parent_run_id"] == parent["run_id"]
 
 
 def _repeatability_manifest(path: Path):

@@ -24,6 +24,9 @@ from generation.cli_support import (
     load_model_bindings,
     load_pubmedqa_runtime_local_only,
     provenance_hashes,
+    pubmedqa_generation_replacement_output_directory,
+    require_pubmedqa_generation_replacement_parent,
+    validate_pubmedqa_generation_replacement,
 )
 from generation.runner import (
     GenerationBlock,
@@ -73,11 +76,13 @@ def _common_parser(parser: argparse.ArgumentParser) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for action in ("run", "resume", "status"):
+    for action in ("run", "replace", "resume", "status"):
         child = subparsers.add_parser(action)
         _common_parser(child)
-        if action in {"run", "resume"}:
+        if action in {"run", "replace", "resume"}:
             child.add_argument("--confirm-api-calls", required=True)
+        if action == "replace":
+            child.add_argument("--parent-run-id", required=True)
         if action in {"resume", "status"}:
             child.add_argument("--run-id", required=True)
     subparsers.add_parser("matrix")
@@ -120,7 +125,7 @@ def _build_inputs(args: argparse.Namespace, *, registered_planned=None):
     adapter = adapter_from_bindings(bindings, args.llm)
     runtime = load_pubmedqa_runtime_local_only(cache_dir=args.cache_dir)
     uses_canonical_generation_identity = (
-        args.action == "run"
+        args.action in {"run", "replace"}
         and registered_planned is None
         and args.registry.resolve() == DEFAULT_REGISTRY_PATH.resolve()
         and (
@@ -212,8 +217,42 @@ def _build_inputs(args: argparse.Namespace, *, registered_planned=None):
         if registered_planned is None
         else REPOSITORY_ROOT / registered_planned["output"]["output_directory"]
     )
-    output_directory = args.output_directory or registered_output or _default_output(block)
-    output_inventory = args.output_inventory or output_directory / "generation_output_inventory_v1.json"
+    replacement_records = ()
+    parent_run_id = None
+    if args.action == "replace":
+        if args.output_directory is not None or args.output_inventory is not None:
+            raise ValueError("replacement output paths are derived and cannot be overridden")
+        replacement_records = read_registry(
+            args.registry,
+            evidence_authority_path=args.evidence_authority,
+        )
+        parent = require_pubmedqa_generation_replacement_parent(
+            replacement_records,
+            args.parent_run_id,
+        )
+        if any(
+            record["execution"]["parent_run_id"] == parent["run_id"]
+            for record in replacement_records
+        ):
+            raise ValueError(
+                "a replacement is already registered for this parent; use resume/status"
+            )
+        parent_run_id = parent["run_id"]
+        output_directory = REPOSITORY_ROOT / (
+            pubmedqa_generation_replacement_output_directory(
+                parent_run_id=parent_run_id,
+                replacement_git_commit=git["commit"],
+            )
+        )
+        output_inventory = output_directory / "generation_output_inventory_v1.json"
+    else:
+        output_directory = (
+            args.output_directory or registered_output or _default_output(block)
+        )
+        output_inventory = (
+            args.output_inventory
+            or output_directory / "generation_output_inventory_v1.json"
+        )
     planned = build_generation_planned_record(
         created_at=utc_now(),
         block=block,
@@ -226,8 +265,11 @@ def _build_inputs(args: argparse.Namespace, *, registered_planned=None):
         runtime_sha256=runtime_sha,
         hardware_summary=f"platform={platform.platform()}",
         output_directory=_relative(output_directory),
+        parent_run_id=parent_run_id,
         evidence_authority_path=args.evidence_authority,
     )
+    if args.action == "replace":
+        validate_pubmedqa_generation_replacement(replacement_records, planned)
     if registered_planned is not None:
         for field in (
             "sprint",
