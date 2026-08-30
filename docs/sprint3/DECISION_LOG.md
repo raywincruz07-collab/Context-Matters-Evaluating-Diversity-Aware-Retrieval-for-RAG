@@ -1,5 +1,70 @@
 # Sprint 3 Decision Log
 
+## 2026-08-30 — Qwen3.8 fallback rejection under frozen repeatability criterion
+
+- **Decision:** Candidate physical model `qwen3.8-27b` occupied the frozen
+  logical third-generator slot `ministral-3-14b`. It is rejected from admission
+  for **REPEATABILITY FAILURE UNDER THE FROZEN ADMISSION PROTOCOL.**
+- **Binding and endpoint provenance:** The binding is
+  `configs/sprint3/maki_model_bindings_v6.json`, with seed `20260823`. maKI
+  exposed two distinct physical endpoints: `qwen3.8-27b` and
+  `qwen3.8-27b-thinking`. The selected endpoint was the normal/non-thinking
+  `qwen3.8-27b`. Its direct-mode status is `SUPPORTED_AND_ENABLED`, with an
+  empty direct-mode control (`{}`). This is intentional: provider-supported
+  non-thinking behavior is selected by the physical maKI endpoint itself, not
+  by an added request control.
+- **Bounded DEVELOPMENT operability diagnostic:** Before binding, a bounded
+  diagnostic with seed `20260823` returned HTTP 200, returned model
+  `qwen3.8-27b`, system fingerprint `vllm-0.27.1-2f53d87d`,
+  `finish_reason = stop`, final content present, reasoning content absent, and
+  `completion_tokens = 55`.
+- **Immutable gate evidence:**
+  `artifacts/generation_repeatability/repeatability_gate_v5.json`, gate ID
+  `generation-repeatability-gate:sha256:7300cf048962f953dc8b99ff095e4cc4c42a9ae2f92581156c50b9b184eddc71`,
+  file SHA256
+  `9612e01fadb78e9b280ad082476456b56cf624a4d24ca92ced251e19ed15d0ad`.
+  The complete gate recorded `llama-3.3-70b` at 20/20 (**PASS**), `gemma4-26b`
+  at 20/20 (**PASS**), and `qwen3.8-27b` at 18/20 (**FAIL**), against the required
+  threshold of `>=19/20`; the overall gate was **FAIL**.
+- **Qwen3.8 call health:** The gate recorded 60 total calls. All 60 returned raw
+  content; there were zero missing-raw-content calls, zero transport-exhausted
+  calls, and zero provider refusals. All 60 had `finish_reason = stop`; all 60
+  attempts had outcome `SUCCESS`, with no attempt errors. All 60 responses used
+  the same system fingerprint, `vllm-0.27.1-2f53d87d`.
+- **Offline client-side gate audit:** An offline code audit of
+  `src/generation/repeatability.py` and `src/generation/maki.py` confirmed that,
+  within each model, one canonical `RenderedPrompt` is reconstructed for each
+  manifest entry before the three-repetition loop and the same prompt is passed
+  to all three calls. For the frozen v6-bound adapter, the canonical request
+  builder fixes the physical model binding, messages, `temperature=0`,
+  `max_tokens=256`, `n=1`, `stream=False`, seed `20260823`, and the frozen
+  direct-mode control. The repeatability decision compares stripped raw final
+  content using exact equality across all three repetitions;
+  `read_repeatability_gate` independently recomputes the same identity count
+  from stored raw call records and verifies the stored pass/fail result. No
+  client-side prompt-construction or repeatability-comparison defect was
+  identified in this audit. This does not prove deterministic behavior by the
+  provider or that every internal provider computation was identical.
+- **Failed-prompt inspection:** The failed DEVELOPMENT prompt IDs were
+  `5a740a655542993a88ae2eee` and `5a82245e5542995ce29dccc7`. Offline inspection
+  showed that each failed prompt triple preserved the same high-level
+  `Decision` value across its three repetitions but differed in explanation
+  wording/content. These results must not be reinterpreted as passes: the
+  frozen criterion is exact stripped-output equality across all three
+  repetitions, and Qwen3.8 achieved only 18/20.
+- **Scope and protocol consequence:** This is not an operability failure, not
+  an infrastructure failure, not an answer-quality rejection, and not a claim
+  that Qwen3.8 is generally unusable. The gate must not be rerun merely to seek
+  a more favorable outcome, and the frozen `>=19/20` threshold must not be
+  relaxed after observing 18/20. A new run would be methodologically justified
+  only if a separately documented implementation or protocol defect were
+  discovered that invalidated this gate. Under Amendment 03, this clean
+  repeatability failure activates the next and final frozen fallback candidate,
+  `qwen3.6-36b`. `SELECTION` and `PROJECT_PROTECTED_FINAL` outcomes remained
+  unopened.
+- **Authority:**
+  `docs/sprint3/EXPERIMENT_STAGE_GATE_PROTOCOL_AMENDMENT_03.md`.
+
 ## 2026-08-30 — MiniMax fallback rejection for frozen-protocol operability
 
 - **Decision:** Candidate physical model `minimax-m2.7` occupied the frozen
