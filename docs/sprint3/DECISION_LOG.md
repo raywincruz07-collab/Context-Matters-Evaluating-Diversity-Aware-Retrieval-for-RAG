@@ -1,5 +1,46 @@
 # Sprint 3 Decision Log
 
+## 2026-08-30 — MiniMax fallback rejection for frozen-protocol operability
+
+- **Decision:** Candidate physical model `minimax-m2.7` occupied the frozen
+  logical third-generator slot `ministral-3-14b`. It is rejected from admission
+  for **OPERABILITY FAILURE UNDER THE FROZEN GENERATION PROTOCOL.** This is not
+  an answer-quality rejection, not a clean repeatability failure, and not a
+  claim that MiniMax is generally unusable.
+- **Binding and direct-mode evidence:** The binding is
+  `configs/sprint3/maki_model_bindings_v5.json`, with seed `20260823`, direct-mode
+  status `NOT_SUPPORTED_BY_PROVIDER`, and an empty direct-mode control (`{}`).
+  Exact maKI-served checkpoint evidence showed no provider-supported
+  `enable_thinking`/non-thinking switch, and the generation template starts
+  generation in `<think>`.
+- **Immutable gate evidence:**
+  `artifacts/generation_repeatability/repeatability_gate_v4.json`, gate ID
+  `generation-repeatability-gate:sha256:7aa1f0d51004c1245d5a9999522ab605d489b8decee5110fe6566d275804693f`,
+  file SHA256
+  `ab462f78f3f2847385516de2ee0bc565388514ce5ad7ce0b724b347a7e1e6db4`.
+  The complete gate recorded `llama-3.3-70b` at 20/20 (**PASS**), `gemma4-26b`
+  at 20/20 (**PASS**), and `minimax-m2.7` at 0/20, with the overall gate
+  **FAIL**. MiniMax's recorded 0/20 must not be interpreted as a clean
+  repeatability failure because most calls did not return evaluable final
+  content.
+- **Offline integrity diagnosis:** The artifact contains 60 MiniMax call
+  records: 44 transport-exhausted calls, 44 calls with missing raw content, and
+  136 infrastructure-error attempts. All 136 errors were
+  `Maki message content is not a string`; only 16 calls returned usable final
+  content.
+- **Bounded DEVELOPMENT diagnostic:** A bounded raw-response diagnostic
+  reproduced the cause: HTTP 200, `finish_reason = length`,
+  `completion_tokens = 256`, reasoning content present, and final
+  `content = null`.
+- **Reason and consequence:** Under the frozen generation protocol, MiniMax can
+  consume the frozen 256-token output budget in reasoning and fail to produce
+  evaluable final answer content, while no provider-supported non-thinking
+  configuration is available. Under Amendment 03, this operability failure
+  activates the next frozen fallback candidate, `qwen3.8-27b`. `SELECTION` and
+  `PROJECT_PROTECTED_FINAL` outcomes remained unopened.
+- **Authority:**
+  `docs/sprint3/EXPERIMENT_STAGE_GATE_PROTOCOL_AMENDMENT_03.md`.
+
 ## 2026-08-29 — Post-reserve generator fallback order
 
 - **Decision:** After `qwen3.5-122b` failed the frozen v3 repeatability gate at
