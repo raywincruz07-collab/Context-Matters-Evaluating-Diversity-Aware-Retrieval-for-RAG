@@ -31,3 +31,6 @@ artifacts/candidates/
 
 # Generated retriever indexes are runtime artifacts and must not dirty provenance.
 artifacts/indexes/
+
+# Deterministic per-query selected-context runtime artifacts; aggregate sets remain tracked.
+artifacts/selected_contexts/pubmedqa/*/sample_*.json
