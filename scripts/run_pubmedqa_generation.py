@@ -23,6 +23,7 @@ from generation.cli_support import (
     git_registry_identity,
     load_model_bindings,
     load_pubmedqa_runtime_local_only,
+    neural_index_artifact_ref,
     provenance_hashes,
     pubmedqa_generation_replacement_output_directory,
     require_pubmedqa_generation_replacement_parent,
@@ -184,12 +185,14 @@ def _build_inputs(args: argparse.Namespace, *, registered_planned=None):
         else:
             if args.index_artifact is None:
                 raise ValueError("neural generation lineage requires --index-artifact")
-            index_ref = artifact_ref(
-                args.index_artifact,
+            index_ref = neural_index_artifact_ref(
                 repository_root=REPOSITORY_ROOT,
-                artifact_id=(
-                    f"index:sha256:{first.retriever.index_fingerprint_sha256}"
+                retriever=block.retriever,
+                artifact_path=args.index_artifact,
+                index_fingerprint_sha256=(
+                    first.retriever.index_fingerprint_sha256
                 ),
+                index_artifact_sha256=first.retriever.index_artifact_sha256,
             )
         retrieval = {
             "retriever": block.retriever,

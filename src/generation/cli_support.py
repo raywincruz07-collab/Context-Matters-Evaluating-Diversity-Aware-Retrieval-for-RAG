@@ -17,7 +17,15 @@ from typing import Any, Mapping
 
 from generation._io import file_sha256, stable_json_sha256
 from generation.maki import CanonicalMakiAdapter, MakiConfig, PRIMARY_LLM_LOGICAL_IDS
-from run_registry import append_run_record, read_registry, run_identity_payload
+from retrieval_artifacts.colbert_cache_identity import (
+    fingerprint_colbert_index_directory,
+)
+from run_registry import (
+    append_run_record,
+    artifact_ref,
+    read_registry,
+    run_identity_payload,
+)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +40,62 @@ _PUBMEDQA_GENERATION_RETRIEVERS = frozenset(
 _GENERATION_SAMPLE_NAME_RE = re.compile(r"sample_([0-9]{4})\.json")
 _RUN_ID_RE = re.compile(r"run-[a-z0-9][a-z0-9-]*-[0-9a-f]{24}")
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def neural_index_artifact_ref(
+    *,
+    repository_root: Path,
+    retriever: str,
+    artifact_path: Path,
+    index_fingerprint_sha256: str,
+    index_artifact_sha256: str,
+) -> dict[str, Any]:
+    """Reference one governed neural index with retriever-specific integrity."""
+    if retriever not in {"dpr", "contriever", "colbertv2"}:
+        raise ValueError(f"unsupported neural retriever: {retriever}")
+    for value, name in (
+        (index_fingerprint_sha256, "index_fingerprint_sha256"),
+        (index_artifact_sha256, "index_artifact_sha256"),
+    ):
+        if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+            raise ValueError(f"{name} must be a lowercase SHA-256 hex digest")
+
+    artifact_id = f"index:sha256:{index_fingerprint_sha256}"
+    if retriever in {"dpr", "contriever"}:
+        reference = artifact_ref(
+            artifact_path,
+            repository_root=repository_root,
+            artifact_id=artifact_id,
+        )
+        if reference["sha256"] != index_artifact_sha256:
+            raise ValueError(
+                "neural index physical SHA does not match "
+                "candidate index_artifact_sha256"
+            )
+        return reference
+
+    root = Path(repository_root).resolve()
+    resolved = Path(artifact_path).resolve()
+    try:
+        relative = resolved.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ValueError(
+            "neural index artifact path is outside repository_root"
+        ) from exc
+    if not resolved.is_dir():
+        raise ValueError(f"ColBERT index artifact must be a directory: {relative}")
+    physical_sha256 = fingerprint_colbert_index_directory(resolved)
+    if physical_sha256 != index_artifact_sha256:
+        raise ValueError(
+            "ColBERT index directory fingerprint does not match "
+            "candidate index_artifact_sha256"
+        )
+    return {
+        "path": relative,
+        "sha256": physical_sha256,
+        "artifact_id": artifact_id,
+    }
 
 
 def load_pubmedqa_runtime_local_only(*, cache_dir: Path | None = None):
