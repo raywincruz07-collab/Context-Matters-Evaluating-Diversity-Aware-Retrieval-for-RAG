@@ -12,6 +12,9 @@
 
 set -euo pipefail
 
+# Required by ColBERT residual CUDA extension JIT compilation.
+module load devel/cuda/12.8
+
 WS="/pfs/work9/workspace/scratch/ma_rthummar-context_matters_sprint3"
 REPO="$WS/context-matters-rag-sprint3"
 PYTHON="$WS/envs/colbert/bin/python"
