@@ -67,6 +67,7 @@ EVIDENCE_ROLES = frozenset(
         "DEVELOPMENT",
         "SELECTION",
         "PROJECT_PROTECTED_FINAL",
+        "OFFICIAL_TEST_FULL",
         "HISTORICAL_OBSERVED",
         "HISTORICAL_OBSERVED_CONTROL_REPLICATION",
     }
@@ -1090,12 +1091,16 @@ def _validate_dataset_role_origin(
                 "PubMedQA control replication requires PROSPECTIVE_BACKFILL origin"
             )
     elif dataset in {"hotpotqa", "asqa"}:
-        if role not in {
+        authorized_roles = {
             "DEVELOPMENT",
             "SELECTION",
             "PROJECT_PROTECTED_FINAL",
             "HISTORICAL_OBSERVED",
-        }:
+        }
+        if dataset == "hotpotqa":
+            authorized_roles.add("OFFICIAL_TEST_FULL")
+
+        if role not in authorized_roles:
             raise RunRecordValidationError(
                 f"{dataset} evidence role is not authorized"
             )
@@ -1103,7 +1108,16 @@ def _validate_dataset_role_origin(
             raise RunRecordValidationError(
                 "historical evidence may only be referenced by ANALYSIS"
             )
-        if role in {"DEVELOPMENT", "SELECTION", "PROJECT_PROTECTED_FINAL"} and origin != "CURRENT_PROTOCOL":
+
+        current_roles = {
+            "DEVELOPMENT",
+            "SELECTION",
+            "PROJECT_PROTECTED_FINAL",
+        }
+        if dataset == "hotpotqa":
+            current_roles.add("OFFICIAL_TEST_FULL")
+
+        if role in current_roles and origin != "CURRENT_PROTOCOL":
             raise RunRecordValidationError(
                 "current HotpotQA/ASQA roles require CURRENT_PROTOCOL origin"
             )
@@ -1137,6 +1151,7 @@ def _validate_stage_role(*, stage: int, role: str, run_type: str) -> None:
     if stage == 5:
         if role not in {
             "PROJECT_PROTECTED_FINAL",
+            "OFFICIAL_TEST_FULL",
             "HISTORICAL_OBSERVED_CONTROL_REPLICATION",
         }:
             raise RunRecordValidationError("Stage 5 evidence role is invalid")
@@ -1146,6 +1161,7 @@ def _validate_stage_role(*, stage: int, role: str, run_type: str) -> None:
             "DEVELOPMENT",
             "SELECTION",
             "PROJECT_PROTECTED_FINAL",
+            "OFFICIAL_TEST_FULL",
             *historical_roles,
         }:
             raise RunRecordValidationError(

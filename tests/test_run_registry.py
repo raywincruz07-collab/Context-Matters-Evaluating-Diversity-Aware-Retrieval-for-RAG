@@ -686,6 +686,49 @@ def test_evidence_authority_binds_dataset_role_to_exact_manifest(tmp_path):
         validate_run_record(wrong, evidence_authority_path=authority)
 
 
+
+def test_hotpotqa_official_test_full_is_authorized_for_final_and_analysis(
+    tmp_path,
+):
+    manifest_id = f"sample-manifest:sha256:{SHA_D}"
+    authority = _write_authority(
+        tmp_path / "authority.json",
+        [("hotpotqa", "OFFICIAL_TEST_FULL", manifest_id)],
+    )
+
+    base = _planned_record(context_mode="without_context")
+
+    final = _role_record(
+        base,
+        dataset="hotpotqa",
+        role="OFFICIAL_TEST_FULL",
+        stage=5,
+        manifest_id=manifest_id,
+        authority_path=authority,
+    )
+
+    assert final["stage"] == 5
+    assert final["evidence_role"] == "OFFICIAL_TEST_FULL"
+
+    analysis = deepcopy(final)
+    analysis.pop("run_id")
+    analysis.update(
+        {
+            "stage": 6,
+            "run_type": "ANALYSIS",
+            "context_mode": None,
+            "generation": None,
+        }
+    )
+
+    analyzed = finalize_planned_record(
+        analysis,
+        evidence_authority_path=authority,
+    )
+
+    assert analyzed["stage"] == 6
+    assert analyzed["evidence_role"] == "OFFICIAL_TEST_FULL"
+
 def test_unmaterialized_role_fails_closed_without_fabricated_manifest(tmp_path):
     authority = _write_authority(tmp_path / "authority.json", [])
     base = _planned_record(context_mode="without_context")
