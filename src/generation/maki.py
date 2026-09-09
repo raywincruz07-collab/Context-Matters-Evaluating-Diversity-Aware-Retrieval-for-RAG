@@ -220,8 +220,12 @@ class CanonicalMakiAdapter:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], str] = utc_now,
         retry_delay_seconds: float = 1.0,
+        max_tokens: int = 256,
     ) -> None:
+        if max_tokens not in {256, 512}:
+            raise ValueError("max_tokens must be one of the frozen dataset values: 256 or 512")
         self.config = config
+        self.max_tokens = max_tokens
         self.transport = RequestsMakiTransport() if transport is None else transport
         self.api_key_env = api_key_env
         self.sleep = sleep
@@ -250,7 +254,7 @@ class CanonicalMakiAdapter:
             "model": self.config.physical_model_id,
             "messages": [dict(message) for message in prompt.messages],
             "temperature": 0,
-            "max_tokens": 256,
+            "max_tokens": self.max_tokens,
             "n": 1,
             "stream": False,
         }

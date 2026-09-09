@@ -488,9 +488,15 @@ def load_model_bindings(path: Path) -> dict[str, MakiConfig]:
 
 
 def adapter_from_bindings(
-    bindings: Mapping[str, MakiConfig], logical_id: str
+    bindings: Mapping[str, MakiConfig],
+    logical_id: str,
+    *,
+    max_tokens: int = 256,
 ) -> CanonicalMakiAdapter:
-    return CanonicalMakiAdapter(bindings[logical_id])
+    return CanonicalMakiAdapter(
+        bindings[logical_id],
+        max_tokens=max_tokens,
+    )
 
 
 def runtime_provenance(adapter: CanonicalMakiAdapter) -> dict[str, Any]:
