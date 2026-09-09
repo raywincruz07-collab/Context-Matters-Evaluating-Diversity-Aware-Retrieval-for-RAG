@@ -133,6 +133,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
     )
+    parser.add_argument(
+        "--candidate-pool",
+        type=int,
+        default=CANDIDATE_POOL,
+    )
 
     return parser.parse_args()
 
@@ -582,10 +587,17 @@ def run_queries(
     retriever,
     queries: list[dict[str, Any]],
     candidate_path: Path,
+    candidate_pool: int,
 ) -> dict[str, Any]:
     candidate_path.parent.mkdir(parents=True, exist_ok=True)
 
-    start_position = completed_query_count(candidate_path)
+    if candidate_pool <= 0:
+        raise ValueError("candidate_pool must be positive")
+
+    start_position = completed_query_count(
+        candidate_path,
+        candidate_pool,
+    )
 
     if start_position:
         print(
@@ -601,13 +613,14 @@ def run_queries(
         for query in queries[start_position:]:
             retrieved = retriever.retrieve(
                 query["question"],
-                top_k=CANDIDATE_POOL,
+                top_k=candidate_pool,
             )
 
-            if len(retrieved) != CANDIDATE_POOL:
+            if len(retrieved) != candidate_pool:
                 raise ValueError(
                     f"{retriever_name} returned "
-                    f"{len(retrieved)} candidates instead of 20"
+                    f"{len(retrieved)} candidates instead of "
+                    f"{candidate_pool}"
                 )
 
             candidates = []
@@ -637,7 +650,7 @@ def run_queries(
                     "query_text_sha256"
                 ],
                 "evidence_role": "OFFICIAL_TEST_FULL",
-                "candidate_pool": CANDIDATE_POOL,
+                "candidate_pool": candidate_pool,
                 "candidates": candidates,
             }
 
@@ -653,7 +666,10 @@ def run_queries(
                     flush=True,
                 )
 
-    total_rows = completed_query_count(candidate_path)
+    total_rows = completed_query_count(
+        candidate_path,
+        candidate_pool,
+    )
 
     if total_rows != EXPECTED_QUERY_COUNT:
         raise ValueError(
@@ -772,7 +788,13 @@ def main() -> None:
     output_dir = args.output_root / args.retriever / "full"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    candidate_path = output_dir / "candidates_top20.jsonl"
+    if args.candidate_pool <= 0:
+        raise ValueError("--candidate-pool must be positive")
+
+    candidate_path = (
+        output_dir
+        / f"candidates_top{args.candidate_pool}.jsonl"
+    )
 
     print(
         f"running {EXPECTED_QUERY_COUNT:,} official test queries...",
@@ -784,6 +806,7 @@ def main() -> None:
         retriever=retriever,
         queries=queries,
         candidate_path=candidate_path,
+        candidate_pool=args.candidate_pool,
     )
 
     summary = {
@@ -813,7 +836,7 @@ def main() -> None:
                 EXPECTED_QUERY_MANIFEST_SHA256
             ),
         },
-        "candidate_pool": CANDIDATE_POOL,
+        "candidate_pool": args.candidate_pool,
         "retriever_config": config.scientific_payload(),
         "cache": cache_stats,
         "timing": {
@@ -834,7 +857,12 @@ def main() -> None:
         },
     }
 
-    summary_path = output_dir / "summary.json"
+    summary_path = (
+        output_dir / "summary.json"
+        if args.candidate_pool == CANDIDATE_POOL
+        else output_dir
+        / f"summary_top{args.candidate_pool}.json"
+    )
     summary_path.write_text(
         json.dumps(
             summary,
