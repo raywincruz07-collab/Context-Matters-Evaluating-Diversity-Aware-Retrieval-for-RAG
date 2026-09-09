@@ -1,9 +1,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import timedelta
 import hashlib
 import json
 import torch
+
+
+# Infrastructure-only safeguard for the full 21M-passage ASQA index.
+# Rank 0 performs a long FAISS clustering phase while the other ranks wait.
+# PyTorch's default 10-minute NCCL timeout is too short for that phase.
+COLBERT_PROCESS_GROUP_TIMEOUT = timedelta(hours=6)
+
+_original_init_process_group = torch.distributed.init_process_group
+
+
+def _init_process_group_with_extended_timeout(*args, **kwargs):
+    kwargs.setdefault(
+        "timeout",
+        COLBERT_PROCESS_GROUP_TIMEOUT,
+    )
+    return _original_init_process_group(*args, **kwargs)
+
+
+torch.distributed.init_process_group = (
+    _init_process_group_with_extended_timeout
+)
 
 from colbert import Indexer
 from colbert.infra import Run, RunConfig, ColBERTConfig
@@ -146,6 +168,10 @@ def preflight() -> None:
             f"Expected exactly 4 GPUs; found {torch.cuda.device_count()}"
         )
 
+    print(
+        "distributed process-group timeout:",
+        COLBERT_PROCESS_GROUP_TIMEOUT,
+    )
     print("PRODUCTION PREFLIGHT: PASS")
 
 
