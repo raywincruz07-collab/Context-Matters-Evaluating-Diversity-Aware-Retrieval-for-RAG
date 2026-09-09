@@ -536,7 +536,13 @@ def build_or_load_dense_index(
     }
 
 
-def completed_query_count(path: Path) -> int:
+def completed_query_count(
+    path: Path,
+    candidate_pool: int = CANDIDATE_POOL,
+) -> int:
+    if candidate_pool <= 0:
+        raise ValueError("candidate_pool must be positive")
+
     if not path.exists():
         return 0
 
@@ -556,9 +562,10 @@ def completed_query_count(path: Path) -> int:
                     "existing candidate JSONL has wrong evidence role"
                 )
 
-            if len(payload.get("candidates", [])) != CANDIDATE_POOL:
+            if len(payload.get("candidates", [])) != candidate_pool:
                 raise ValueError(
-                    "existing candidate row does not contain top-20"
+                    "existing candidate row does not contain "
+                    f"top-{candidate_pool}"
                 )
 
             completed += 1

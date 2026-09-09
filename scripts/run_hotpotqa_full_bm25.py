@@ -60,6 +60,7 @@ from retrievers.bm25_config import BM25_CONFIG
 RESULT_SCHEMA = "hotpotqa.full-bm25-retrieval-result.v1"
 
 _WORKER_RETRIEVER = None
+_WORKER_CANDIDATE_POOL = CANDIDATE_POOL
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +96,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=16,
     )
+    parser.add_argument(
+        "--candidate-pool",
+        type=int,
+        default=CANDIDATE_POOL,
+    )
 
     return parser.parse_args()
 
@@ -124,12 +130,13 @@ def _retrieve_one(query: dict[str, Any]) -> dict[str, Any]:
 
     retrieved = _WORKER_RETRIEVER.retrieve(
         query["question"],
-        top_k=CANDIDATE_POOL,
+        top_k=_WORKER_CANDIDATE_POOL,
     )
 
-    if len(retrieved) != CANDIDATE_POOL:
+    if len(retrieved) != _WORKER_CANDIDATE_POOL:
         raise ValueError(
-            f"BM25 returned {len(retrieved)} candidates instead of 20"
+            f"BM25 returned {len(retrieved)} candidates instead of "
+            f"{_WORKER_CANDIDATE_POOL}"
         )
 
     candidates: list[dict[str, Any]] = []
@@ -152,7 +159,7 @@ def _retrieve_one(query: dict[str, Any]) -> dict[str, Any]:
         "query_id": query["query_id"],
         "query_text_sha256": query["query_text_sha256"],
         "evidence_role": "OFFICIAL_TEST_FULL",
-        "candidate_pool": CANDIDATE_POOL,
+        "candidate_pool": _WORKER_CANDIDATE_POOL,
         "candidates": candidates,
     }
 
@@ -163,8 +170,10 @@ def run_parallel_queries(
     queries: list[dict[str, Any]],
     candidate_path: Path,
     workers: int,
+    candidate_pool: int,
 ) -> dict[str, Any]:
     global _WORKER_RETRIEVER
+    global _WORKER_CANDIDATE_POOL
 
     if workers < 1:
         raise ValueError("workers must be >= 1")
@@ -178,7 +187,7 @@ def run_parallel_queries(
 
     candidate_path.parent.mkdir(parents=True, exist_ok=True)
 
-    start_position = completed_query_count(candidate_path)
+    start_position = completed_query_count(candidate_path, candidate_pool)
 
     if start_position:
         print(
@@ -203,7 +212,11 @@ def run_parallel_queries(
             "parallel full BM25 requires Linux fork semantics"
         )
 
+    if candidate_pool <= 0:
+        raise ValueError("candidate_pool must be positive")
+
     _WORKER_RETRIEVER = retriever
+    _WORKER_CANDIDATE_POOL = candidate_pool
     context = mp.get_context("fork")
 
     mode = "a" if start_position else "w"
@@ -254,7 +267,7 @@ def run_parallel_queries(
                         flush=True,
                     )
 
-    total_rows = completed_query_count(candidate_path)
+    total_rows = completed_query_count(candidate_path, candidate_pool)
 
     if total_rows != EXPECTED_QUERY_COUNT:
         raise ValueError(
@@ -381,13 +394,20 @@ def main() -> None:
     output_dir = args.output_root / "bm25" / "full"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    candidate_path = output_dir / "candidates_top20.jsonl"
+    if args.candidate_pool <= 0:
+        raise ValueError("--candidate-pool must be positive")
+
+    candidate_path = (
+        output_dir
+        / f"candidates_top{args.candidate_pool}.jsonl"
+    )
 
     query_stats = run_parallel_queries(
         retriever=retriever,
         queries=queries,
         candidate_path=candidate_path,
         workers=args.workers,
+        candidate_pool=args.candidate_pool,
     )
 
     summary = {
@@ -417,7 +437,7 @@ def main() -> None:
                 EXPECTED_QUERY_MANIFEST_SHA256
             ),
         },
-        "candidate_pool": CANDIDATE_POOL,
+        "candidate_pool": args.candidate_pool,
         "retriever_config": BM25_CONFIG.scientific_payload(),
         "parallelism": {
             "method": (
@@ -452,7 +472,11 @@ def main() -> None:
         },
     }
 
-    summary_path = output_dir / "summary.json"
+    summary_path = (
+        output_dir / "summary.json"
+        if args.candidate_pool == CANDIDATE_POOL
+        else output_dir / f"summary_top{args.candidate_pool}.json"
+    )
 
     summary_path.write_text(
         json.dumps(
