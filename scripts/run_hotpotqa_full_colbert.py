@@ -68,6 +68,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--cache-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--candidate-pool",
+        type=int,
+        default=CANDIDATE_POOL,
+    )
     return parser.parse_args()
 
 
@@ -77,10 +82,17 @@ def run_queries(
     queries: list[dict[str, Any]],
     runtime_documents: list[dict[str, Any]],
     output_path: Path,
+    candidate_pool: int,
 ) -> dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    start_position = completed_query_count(output_path)
+    if candidate_pool <= 0:
+        raise ValueError("candidate_pool must be positive")
+
+    start_position = completed_query_count(
+        output_path,
+        candidate_pool,
+    )
     remaining = queries[start_position:]
 
     if start_position:
@@ -106,20 +118,21 @@ def run_queries(
         for query in remaining:
             pids, _ranks, scores = searcher.search(
                 query["question"],
-                k=CANDIDATE_POOL,
+                k=candidate_pool,
             )
 
-            if len(pids) != CANDIDATE_POOL:
+            if len(pids) != candidate_pool:
                 raise ValueError(
-                    f"ColBERT returned {len(pids)} candidates instead of 20"
+                    f"ColBERT returned {len(pids)} candidates instead of "
+                    f"{candidate_pool}"
                 )
 
-            if len(scores) != CANDIDATE_POOL:
+            if len(scores) != candidate_pool:
                 raise ValueError("ColBERT score count mismatch")
 
             normalized_pids = tuple(int(pid) for pid in pids)
 
-            if len(set(normalized_pids)) != CANDIDATE_POOL:
+            if len(set(normalized_pids)) != candidate_pool:
                 raise ValueError("ColBERT returned duplicate PIDs")
 
             if any(
@@ -158,7 +171,7 @@ def run_queries(
                 "query_id": query["query_id"],
                 "query_text_sha256": query["query_text_sha256"],
                 "evidence_role": "OFFICIAL_TEST_FULL",
-                "candidate_pool": CANDIDATE_POOL,
+                "candidate_pool": candidate_pool,
                 "candidates": candidates,
             }
 
@@ -187,7 +200,10 @@ def run_queries(
                     flush=True,
                 )
 
-    total_rows = completed_query_count(output_path)
+    total_rows = completed_query_count(
+        output_path,
+        candidate_pool,
+    )
 
     if total_rows != EXPECTED_QUERY_COUNT:
         raise ValueError(
@@ -368,7 +384,13 @@ def main() -> None:
     output_dir = args.output_root / "colbert" / "full"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    candidate_path = output_dir / "candidates_top20.jsonl"
+    if args.candidate_pool <= 0:
+        raise ValueError("--candidate-pool must be positive")
+
+    candidate_path = (
+        output_dir
+        / f"candidates_top{args.candidate_pool}.jsonl"
+    )
 
     print("loading ColBERT searcher...", flush=True)
 
@@ -403,6 +425,7 @@ def main() -> None:
             queries=queries,
             runtime_documents=runtime_documents,
             output_path=candidate_path,
+            candidate_pool=args.candidate_pool,
         )
 
     summary = {
@@ -412,7 +435,7 @@ def main() -> None:
         "evidence_role": "OFFICIAL_TEST_FULL",
         "git_commit": git_commit(),
         "retriever": "colbert",
-        "candidate_pool": CANDIDATE_POOL,
+        "candidate_pool": args.candidate_pool,
         "corpus": {
             "document_count": HOTPOTQA_EXPECTED_DOCUMENT_COUNT,
             "scientific_sha256": EXPECTED_CORPUS_SHA256,
@@ -439,7 +462,10 @@ def main() -> None:
             "revision": COLBERT_CONFIG.checkpoint_revision,
             **checkpoint_info,
         },
-        "colbert_config": COLBERT_CONFIG.scientific_payload(),
+        "colbert_config": {
+            **COLBERT_CONFIG.scientific_payload(),
+            "candidate_pool_size": args.candidate_pool,
+        },
         "index": {
             "index_path": str(index_path),
             "index_build_seconds": index_seconds,
@@ -476,7 +502,12 @@ def main() -> None:
         },
     }
 
-    summary_path = output_dir / "summary.json"
+    summary_path = (
+        output_dir / "summary.json"
+        if args.candidate_pool == CANDIDATE_POOL
+        else output_dir
+        / f"summary_top{args.candidate_pool}.json"
+    )
 
     summary_path.write_text(
         json.dumps(
